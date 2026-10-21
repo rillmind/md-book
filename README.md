@@ -1,34 +1,33 @@
-# mdbook-generator
+# md-book
 
-Gera um livro [mdBook](https://rust-lang.github.io/mdBook/) a partir de um PDF de texto:
-`book.toml` + `src/SUMMARY.md` + um `.md` por capítulo.
+Converte um PDF de texto em um livro [mdBook](https://rust-lang.github.io/mdBook/): gera o
+`book.toml`, o `src/SUMMARY.md` e um arquivo Markdown por capítulo. Hoje é uma ferramenta de
+linha de comando; TUI e GUI estão previstas.
+
+## Ferramentas
+
+- [Rust](https://www.rust-lang.org/) (edition 2024) e Cargo
+- [pdf-extract](https://crates.io/crates/pdf-extract) / [lopdf](https://crates.io/crates/lopdf): leitura do PDF
+- [clap](https://crates.io/crates/clap) e [indicatif](https://crates.io/crates/indicatif): linha de comando e progresso
+- [mdbook-driver](https://crates.io/crates/mdbook-driver): geração do HTML (opcional)
+
+## Instalação
+
+Requer o Rust instalado ([rustup](https://rustup.rs/)).
 
 ```sh
-cargo build --release                       # binário em target/release/md-book
-./target/release/md-book livro.pdf -o meu-livro
-mdbook serve meu-livro                      # ou use --build (abaixo)
+git clone <url-do-repositório>
+cd mdbook-generator
+cargo install --path crates/cli                    # instala o binário md-book
+cargo install --path crates/cli --features build   # idem, com suporte a --build (HTML)
 ```
 
-| Opção | |
-|---|---|
-| `-o, --output <DIR>` | diretório do livro (padrão: `./<nome-do-pdf>`) |
-| `--title`, `--author`, `--language` | campos do `book.toml` (título padrão: metadados do PDF) |
-| `--split-level <N>` | títulos até o nível N viram arquivos separados (padrão 1) |
-| `--no-outline` | ignora os bookmarks e detecta títulos pelo tamanho da fonte |
-| `--force` | sobrescreve um diretório de saída não vazio (recria `src/`) |
-| `--build` | compila o HTML; requer `cargo build --features build` |
+## Uso
 
-## Como os capítulos são detectados
+```sh
+md-book livro.pdf -o meu-livro           # gera o projeto mdBook em ./meu-livro
+md-book livro.pdf -o meu-livro --build   # gera também o HTML em ./meu-livro/book
+md-book --help                           # todas as opções
+```
 
-1. **Bookmarks do PDF**, se existirem e parecerem completos.
-2. Senão, **tamanho da fonte**: o tamanho mais comum é o corpo; tamanhos maiores viram títulos.
-3. Cabeçalhos/rodapés repetidos e números de página são removidos; linhas viram parágrafos
-   (com hifenização desfeita) e marcadores (`•`, `-`) viram listas.
-
-PDFs escaneados (só imagem) precisam de OCR antes.
-
-## Estrutura
-
-- `crates/core` — biblioteca (`analyze` → `Book` em memória, `write_book` → disco). TUI/GUI futuras usam só ela.
-- `crates/cli` — binário `md-book`.
-- `crates/core/tests/fixtures/gerar.py` — regenera os PDFs de teste (requer LibreOffice).
+Sem instalar, rode direto do repositório: `cargo run --release -- livro.pdf -o meu-livro`.

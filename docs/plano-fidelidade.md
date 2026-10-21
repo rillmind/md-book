@@ -13,6 +13,10 @@ A v0.1 converte bem PDFs de texto simples, mas tem cinco limitações que o usu�
 4. **Imagens** são descartadas.
 5. PDFs **escaneados** falham (sem OCR).
 
+Feedback do usuário após testar a v0.1 com PDFs reais: **o texto corrido funcionou, mas o
+resto sai muitas vezes mal formado** (“péssimo”). Por isso a qualidade do texto virou uma fase
+própria (F2), prioritária, antes das features novas.
+
 A causa comum de 1–4 é o motor de extração: o `pdf-extract` entrega só caractere + tamanho de
 fonte + posição. Não informa nome/peso da fonte, não expõe imagens nem os traços (linhas de
 tabela) da página. Por isso o primeiro passo é trocar o motor.
@@ -51,14 +55,41 @@ struct Segment { from: (f32, f32), to: (f32, f32) }   // linhas horizontais/vert
 - Outline via pdfium. Todos os testes atuais devem continuar passando.
 - Remover `pdf-extract`.
 
-### F2 — Layout multi-coluna (ordem de leitura)
+### F2 — Qualidade do texto (prioridade, antes das features novas)
+Primeiro, montar um **corpus de regressão** com os PDFs reais que o usuário testou:
+`corpus/` fora do git (direitos autorais), com a saída Markdown revisada à mão como gabarito
+e um teste que compara e mostra o diff. Os problemas conhecidos na v0.1, e o que fazer:
+- **Escape excessivo**: `\_`, `\*`, `\[` em todo lugar deixam o `.md` ilegível. Escapar só
+  quando o caractere de fato formaria sintaxe (ex.: `*` envolvendo uma palavra, `<` seguido de
+  letra, `[`…`](`), e manter o fonte limpo.
+- **Hifenização**: hoje "bem-" + "estar" vira "bemestar". Só remover o hífen se a palavra
+  unida existir na própria obra (contagem de palavras do livro) ou se a parte antes do hífen
+  não for uma palavra sozinha; senão manter "bem-estar". Tratar o soft hyphen (U+00AD).
+- **Parágrafos**: usar o **recuo da primeira linha** (padrão de livros) além do espaço
+  vertical; detectar a margem esquerda do corpo por página.
+- **Títulos**: além do tamanho, usar negrito/caixa alta/linha isolada com espaço acima e abaixo
+  (depende do F1); numeração no início ("1.2", "Capítulo 3", "CAPÍTULO III").
+- **Listas**: numeradas (`1.`, `1)`, `a)`, `i.`) e continuação de item pelo recuo.
+- **Notas de rodapé**: bloco de fonte menor no pé da página → nota mdBook (`[^1]`) ou
+  removida; marcador sobrescrito no texto vira referência.
+- **Normalização Unicode**: ligaduras (ﬁ, ﬂ), espaços estranhos e aspas → NFKC seletivo.
+- **Espaços entre palavras**: com o pdfium, usar o espaçamento real das letras (e os
+  caracteres de espaço gerados) em vez do limiar fixo, para não colar nem partir palavras.
+- **Sobrescrito/subscrito e capitulares**: não podem quebrar a linha nem virar título.
+- **Linhas de página**: cabeçalhos e rodapés que variam (título do capítulo em páginas
+  pares/ímpares) devem ser reconhecidos pela posição, mesmo sem repetir o texto exato.
+
+Critério de pronto: o corpus inteiro gera Markdown legível no próprio `.md`, sem regressão
+no texto corrido.
+
+### F3 — Layout multi-coluna (ordem de leitura)
 - Por página, **XY-cut recursivo**: corta onde há faixas verticais/horizontais vazias
   maiores que um limiar (relativo ao tamanho do corpo) → blocos de coluna.
 - Ordem: de cima para baixo; dentro de uma faixa, colunas da esquerda para a direita.
 - Títulos que atravessam as colunas (largura total) ficam no topo da faixa.
 - Fixture: seção de 2 colunas no `gerar.py` (LibreOffice "Formatar → Colunas").
 
-### F3 — Negrito, itálico e código
+### F4 — Negrito, itálico e código
 - Estilo do span: negrito se `font_weight >= 600` ou nome contém Bold/Black/Heavy/Semibold;
   itálico se flag ou nome contém Italic/Oblique; mono se nome contém
   Courier/Mono/Consolas/Menlo/Code.
@@ -67,21 +98,21 @@ struct Segment { from: (f32, f32), to: (f32, f32) }   // linhas horizontais/vert
 - Linhas consecutivas inteiramente mono → bloco de código cercado (```), preservando indentação.
 - Estilo uniforme num título inteiro é ignorado (o título já é destaque).
 
-### F4 — Imagens
+### F5 — Imagens
 - Extrai imagens raster para `src/images/cNN-iK.png` e insere `![](images/...)` na posição de
   leitura (pelo bbox).
 - Ignora imagens minúsculas (< 32 px) e repetidas em muitas páginas (hash → logos/marcas d'água).
 - Flag `--no-images`. Gravação em streaming (não acumular imagens na memória).
 - Fora de escopo inicial: figuras vetoriais (possível depois: renderizar a região do bbox).
 
-### F5 — Tabelas
+### F6 — Tabelas
 - **Com bordas**: segmentos horizontais + verticais formando grade → células pelas interseções.
 - **Sem bordas**: ≥ 3 linhas seguidas com ≥ 2 colunas alinhadas nos mesmos x.
 - Saída em tabela GFM (`| a | b |`, o mdBook suporta); `|` escapado; quebras de linha na
   célula → `<br>`. Células mescladas/irregulares → mantém como texto (sem inventar estrutura).
 - Fixtures: uma tabela com bordas e uma sem.
 
-### F6 — OCR (feature cargo `ocr`)
+### F7 — OCR (feature cargo `ocr`)
 - Página sem texto (ou quase) → renderiza com pdfium a 300 dpi → Tesseract.
 - Usar saída TSV/hOCR (palavras com bbox) para gerar `Span`s e reaproveitar todo o pipeline;
   tamanho de fonte estimado pela altura das caixas.
