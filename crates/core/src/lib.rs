@@ -1,14 +1,18 @@
 //! Núcleo do mdbook-generator: converte um PDF de texto num projeto mdBook.
 //!
 //! O fluxo é dividido em duas etapas para que CLI, TUI e GUI possam mostrar uma prévia:
-//! [`analyze`] lê o PDF e monta o [`Book`] em memória.
+//! [`analyze`] lê o PDF e monta o [`Book`] em memória; [`write_book`] grava em disco.
 
+mod book;
 mod extract;
+mod markdown;
 mod outline;
 mod structure;
 
 use std::path::{Path, PathBuf};
 
+pub use book::{WrittenBook, write_book};
+pub use markdown::render_chapter;
 pub use structure::{Block, Chapter, FRONT_MATTER_TITLE, HeadingSource};
 
 #[derive(Debug, thiserror::Error)]
