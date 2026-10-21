@@ -1,0 +1,21 @@
+[package]
+name = "mdbook-generator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Gera um livro mdBook a partir de um PDF de texto"
+
+[[bin]]
+name = "md-book"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive"] }
+indicatif = "0.18.6"
+mdbook-driver = { version = "0.5.4", default-features = false, optional = true }
+mdbook_gen_core = { version = "0.1.0", path = "../core" }
+
+[features]
+# Compila o livro HTML com --build (dependência pesada, por isso opcional).
+build = ["dep:mdbook-driver", "mdbook-driver/search"]
