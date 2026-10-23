@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::layout::PageContent;
-use crate::model::{Line, Style};
+use crate::model::{Line, Script, Style};
 use crate::outline::OutlineEntry;
 use crate::text::{self, ListKind, Vocabulary};
 
@@ -16,6 +16,11 @@ pub enum Inline {
   },
   /// Quebra de linha dentro do parágrafo (versos).
   Break,
+  /// Sobrescrito sem nota correspondente (ex.: expoente).
+  Sup(String),
+  Sub(String),
+  /// Referência a uma nota de rodapé ([`Block::Footnote`] com o mesmo id).
+  FootnoteRef(String),
 }
 
 impl Inline {
@@ -38,6 +43,13 @@ pub enum Block {
     kind: ListKind,
     /// Nível de aninhamento, começando em 0.
     depth: u8,
+    content: Vec<Inline>,
+  },
+  /// Bloco de código (linhas em fonte monoespaçada), com a indentação reconstruída.
+  Code(String),
+  /// Nota de rodapé; o Markdown a coloca no fim do capítulo.
+  Footnote {
+    id: String,
     content: Vec<Inline>,
   },
 }
@@ -578,9 +590,36 @@ impl Current {
   }
 }
 
+/// Linhas de código acumuladas: posição x, texto e se vem depois de uma linha em branco.
+struct CodeBuffer {
+  lines: Vec<(f32, String, bool)>,
+  char_width: f32,
+  last_baseline: f32,
+}
+
+impl CodeBuffer {
+  fn into_block(self) -> Block {
+    let min_x = self.lines.iter().map(|l| l.0).fold(f32::MAX, f32::min);
+    let mut code = String::new();
+    for (x0, text, blank_before) in self.lines {
+      if blank_before {
+        code.push('\n');
+      }
+      let indent = ((x0 - min_x) / self.char_width.max(0.1)).round().max(0.0) as usize;
+      code.push_str(&" ".repeat(indent));
+      code.push_str(text.trim_end());
+      code.push('\n');
+    }
+    Block::Code(code.trim_end().to_string())
+  }
+}
+
 struct Assembler<'v> {
   blocks: Vec<Block>,
   current: Option<Current>,
+  code: Option<CodeBuffer>,
+  /// Marcadores das notas de rodapé da página atual → id da nota.
+  notes: HashMap<String, String>,
   /// Posição do marcador do primeiro item da lista atual, para calcular aninhamento.
   list_base_x: Option<f32>,
   vocabulary: &'v Vocabulary,
@@ -588,15 +627,60 @@ struct Assembler<'v> {
 
 impl Assembler<'_> {
   fn close(&mut self) {
+    self.close_text();
+    self.close_code();
+  }
+
+  fn close_text(&mut self) {
     if let Some(current) = self.current.take() {
       let empty = current.inlines().iter().all(|i| match i {
         Inline::Text { text, .. } => text.trim().is_empty(),
         Inline::Break => true,
+        _ => false,
       });
       if !empty {
         self.blocks.push(current.into_block());
       }
     }
+  }
+
+  fn close_code(&mut self) {
+    if let Some(code) = self.code.take() {
+      self.blocks.push(code.into_block());
+    }
+  }
+
+  fn code_line(&mut self, line: &Line, stats: &PageStats) {
+    self.close_text();
+    let char_width = line
+      .spans
+      .iter()
+      .filter(|s| s.text.chars().count() >= 3)
+      .map(|s| s.bbox.width() / s.text.chars().count() as f32)
+      .fold(f32::MAX, f32::min);
+    let char_width = if char_width == f32::MAX {
+      line.size * 0.5
+    } else {
+      char_width
+    };
+    let code = self.code.get_or_insert(CodeBuffer {
+      lines: Vec::new(),
+      char_width,
+      last_baseline: line.baseline,
+    });
+    let delta = line.baseline - code.last_baseline;
+    let blank = !code.lines.is_empty() && stats.gap.is_some_and(|g| delta > g * 1.6);
+    code.char_width = code.char_width.min(char_width);
+    code.last_baseline = line.baseline;
+    code.lines.push((line.bbox.x0, line.text(), blank));
+  }
+
+  fn footnote(&mut self, id: String, content: Vec<Inline>) {
+    self.blocks.push(Block::Footnote { id, content });
+  }
+
+  fn inlines(&self, line: &Line, skip_chars: usize, stats: &PageStats) -> Vec<Inline> {
+    line_inlines(line, skip_chars, stats, &self.notes)
   }
 
   fn heading(&mut self, level: u8, text: &str) {
@@ -615,6 +699,11 @@ impl Assembler<'_> {
   }
 
   fn line(&mut self, line: &Line, prev: Option<&Line>, stats: &PageStats) {
+    if line.is_mono() {
+      self.code_line(line, stats);
+      return;
+    }
+    self.close_code();
     let text = line.text();
     if stats.verse {
       self.verse_line(line, prev, stats);
@@ -632,10 +721,11 @@ impl Assembler<'_> {
         0
       };
       let marker_share = (text.len() - rest.len()) as f32 / text.len().max(1) as f32;
+      let skip = text.chars().count() - rest.chars().count();
       self.current = Some(Current::Item {
         kind,
         depth,
-        content: line_inlines(line, Some(rest), stats),
+        content: self.inlines(line, skip, stats),
         text_x0: line.bbox.x0 + line.bbox.width() * marker_share,
       });
       return;
@@ -668,16 +758,13 @@ impl Assembler<'_> {
         }
       };
 
+    let inlines = self.inlines(line, 0, stats);
     match self.current.as_mut() {
-      Some(current) if !breaks => join_inlines(
-        current.inlines_mut(),
-        line_inlines(line, None, stats),
-        self.vocabulary,
-      ),
+      Some(current) if !breaks => join_inlines(current.inlines_mut(), inlines, self.vocabulary),
       _ => {
         self.close();
         self.list_base_x = None;
-        self.current = Some(Current::Paragraph(line_inlines(line, None, stats)));
+        self.current = Some(Current::Paragraph(inlines));
       }
     }
   }
@@ -693,7 +780,7 @@ impl Assembler<'_> {
     });
     let after_speaker =
       matches!(&self.current, Some(c) if is_caps_label(c.last_text()) && c.inlines().len() == 1);
-    let inlines = line_inlines(line, None, stats);
+    let inlines = self.inlines(line, 0, stats);
     match self.current.as_mut() {
       Some(Current::Paragraph(content)) if !(wide_gap || speaker || after_speaker) => {
         let last = match content.last() {
@@ -730,14 +817,142 @@ fn first_word_fits(line: &Line, prev: &Line, right: f32) -> bool {
   prev.bbox.x1 + (first_word as f32 + 1.0) * char_width < right
 }
 
-/// Converte a linha (ou o texto depois do marcador de lista) em trechos.
-fn line_inlines(line: &Line, rest: Option<&str>, stats: &PageStats) -> Vec<Inline> {
-  let text = match rest {
-    Some(rest) => rest.to_string(),
-    None if stats.verse => without_margin_numbers(line),
-    None => line.text(),
+/// Converte a linha em trechos com estilo, pulando os primeiros `skip_chars` caracteres (o
+/// marcador de lista). Sobrescritos viram referência de nota quando há nota com esse marcador.
+fn line_inlines(
+  line: &Line,
+  skip_chars: usize,
+  stats: &PageStats,
+  notes: &HashMap<String, String>,
+) -> Vec<Inline> {
+  let margin = if stats.verse {
+    margin_number_span(line)
+  } else {
+    None
   };
-  vec![Inline::plain(text::strip_soft_hyphens(&text))]
+  let mut out: Vec<Inline> = Vec::new();
+  let mut first = true;
+  for (i, span) in line.spans.iter().enumerate() {
+    if Some(i) == margin {
+      continue;
+    }
+    if span.space_before && !first {
+      push_text(&mut out, " ", Style::default(), true);
+    }
+    first = false;
+    let trimmed = span.text.trim();
+    match line.script(span) {
+      Script::Super if !trimmed.is_empty() => match notes.get(trimmed) {
+        Some(id) => out.push(Inline::FootnoteRef(id.clone())),
+        None => out.push(Inline::Sup(trimmed.to_string())),
+      },
+      Script::Sub if !trimmed.is_empty() => out.push(Inline::Sub(trimmed.to_string())),
+      _ => push_text(
+        &mut out,
+        &text::strip_soft_hyphens(&span.text),
+        span.style,
+        false,
+      ),
+    }
+  }
+  drop_prefix(&mut out, skip_chars);
+  trim_inlines(&mut out);
+  link_symbol_refs(out, notes)
+}
+
+/// Notas marcadas com símbolo ("switch*") aparecem no texto colado à palavra, sem sobrescrito.
+fn link_symbol_refs(content: Vec<Inline>, notes: &HashMap<String, String>) -> Vec<Inline> {
+  let symbols: Vec<(&String, &String)> = notes
+    .iter()
+    .filter(|(marker, _)| !marker.chars().any(char::is_alphanumeric))
+    .collect();
+  if symbols.is_empty() {
+    return content;
+  }
+  let mut out = Vec::with_capacity(content.len());
+  for inline in content {
+    let Inline::Text { text, style } = inline else {
+      out.push(inline);
+      continue;
+    };
+    let mut rest = text.as_str();
+    'scan: loop {
+      for (marker, id) in &symbols {
+        let found = rest.match_indices(marker.as_str()).find(|(i, _)| {
+          rest[..*i]
+            .chars()
+            .next_back()
+            .is_some_and(char::is_alphanumeric)
+        });
+        if let Some((i, _)) = found {
+          out.push(Inline::Text {
+            text: rest[..i].to_string(),
+            style,
+          });
+          out.push(Inline::FootnoteRef((*id).clone()));
+          rest = &rest[i + marker.len()..];
+          continue 'scan;
+        }
+      }
+      break;
+    }
+    if !rest.is_empty() {
+      out.push(Inline::Text {
+        text: rest.to_string(),
+        style,
+      });
+    }
+  }
+  out
+}
+
+/// Acrescenta texto, unindo ao trecho anterior de mesmo estilo (espaços herdam o estilo vizinho).
+fn push_text(out: &mut Vec<Inline>, text: &str, style: Style, is_space: bool) {
+  if let Some(Inline::Text {
+    text: prev,
+    style: s,
+  }) = out.last_mut()
+    && (*s == style || is_space)
+  {
+    prev.push_str(text);
+    return;
+  }
+  out.push(Inline::Text {
+    text: text.to_string(),
+    style,
+  });
+}
+
+/// Remove `n` caracteres do início (o marcador de lista já reconhecido no texto da linha).
+fn drop_prefix(out: &mut Vec<Inline>, mut n: usize) {
+  while n > 0 && !out.is_empty() {
+    let len = match &out[0] {
+      Inline::Text { text, .. } => {
+        text.trim_start().chars().count() + (text.len() - text.trim_start().len())
+      }
+      Inline::Sup(t) | Inline::Sub(t) | Inline::FootnoteRef(t) => t.chars().count(),
+      Inline::Break => 0,
+    };
+    if len <= n {
+      n -= len;
+      out.remove(0);
+    } else {
+      if let Inline::Text { text, .. } = &mut out[0] {
+        *text = text.chars().skip(n).collect();
+      }
+      n = 0;
+    }
+  }
+}
+
+fn trim_inlines(out: &mut Vec<Inline>) {
+  if let Some(Inline::Text { text, .. }) = out.first_mut() {
+    *text = text.trim_start().to_string();
+  }
+  if let Some(Inline::Text { text, .. }) = out.last_mut() {
+    *text = text.trim_end().to_string();
+  }
+  out.retain(|i| !matches!(i, Inline::Text { text, .. } if text.is_empty()));
 }
 
 /// Índice do trecho que é número de linha na margem: número isolado por um espaço grande no
@@ -764,16 +979,6 @@ fn margin_number_span(line: &Line) -> Option<usize> {
 
 fn margin_number(line: &Line) -> Option<u32> {
   margin_number_span(line).and_then(|i| line.spans[i].text.trim().parse().ok())
-}
-
-/// Texto da linha sem a numeração de margem ("40", "45"...).
-fn without_margin_numbers(line: &Line) -> String {
-  let Some(index) = margin_number_span(line) else {
-    return line.text();
-  };
-  let mut kept = line.clone();
-  kept.spans.remove(index);
-  kept.text()
 }
 
 /// Rótulo todo em maiúsculas e curto, como o nome de um personagem.
@@ -818,12 +1023,19 @@ fn assemble(
   let mut asm = Assembler {
     blocks: Vec::new(),
     current: None,
+    code: None,
+    notes: HashMap::new(),
     list_base_x: None,
     vocabulary,
   };
   for (page, page_items) in pages.iter().zip(items) {
     let lines: Vec<&Line> = page.lines().collect();
     let stats = PageStats::new(&lines, fonts.body);
+    let notes = find_footnotes(page, &lines, fonts.body);
+    asm.notes = notes
+      .iter()
+      .map(|n| (n.marker.clone(), n.id.clone()))
+      .collect();
     asm.page_start();
     let mut prev: Option<&Line> = None;
     for item in page_items {
@@ -832,15 +1044,147 @@ fn assemble(
           asm.heading(*level, text);
           prev = None;
         }
+        Item::Line(line)
+          if notes
+            .iter()
+            .any(|n| n.lines.iter().any(|l| std::ptr::eq(*l, *line))) => {}
         Item::Line(line) => {
           asm.line(line, prev, &stats);
           prev = Some(line);
         }
       }
     }
+    for note in &notes {
+      let mut content: Vec<Inline> = Vec::new();
+      for (i, &line) in note.lines.iter().enumerate() {
+        let skip = if i == 0 { note.skip } else { 0 };
+        let inlines = line_inlines(line, skip, &stats, &HashMap::new());
+        if content.is_empty() {
+          content = inlines;
+        } else {
+          join_inlines(&mut content, inlines, vocabulary);
+        }
+      }
+      asm.footnote(note.id.clone(), content);
+    }
   }
   asm.close();
   asm.blocks
+}
+
+struct Footnote<'a> {
+  id: String,
+  marker: String,
+  /// Caracteres do marcador no início da primeira linha.
+  skip: usize,
+  lines: Vec<&'a Line>,
+}
+
+/// Notas de rodapé: linhas em fonte menor abaixo de todo o corpo do texto, na metade de baixo
+/// da página, cada nota começando com um marcador ("1", "*", "†" ou número sobrescrito).
+fn find_footnotes<'a>(page: &PageContent, lines: &[&'a Line], body: f32) -> Vec<Footnote<'a>> {
+  let body_bottom = lines
+    .iter()
+    .filter(|l| l.size >= body * 0.95 && !l.is_mono())
+    .map(|l| l.bbox.y1)
+    .fold(f32::MIN, f32::max);
+  if body_bottom == f32::MIN {
+    return Vec::new();
+  }
+  let mut notes: Vec<Footnote> = Vec::new();
+  for &line in lines {
+    let below = line.bbox.y0 >= body_bottom && line.bbox.y0 > page.height * 0.5;
+    if !below || line.size >= body * 0.95 {
+      continue;
+    }
+    match footnote_marker(line) {
+      Some((marker, skip)) => {
+        let key: String = marker.chars().filter(|c| c.is_alphanumeric()).collect();
+        let key = if key.is_empty() {
+          format!("n{}", notes.len() + 1)
+        } else {
+          key
+        };
+        let mut id = format!("{}-{key}", page.number);
+        if notes.iter().any(|n| n.id == id) {
+          id = format!("{id}-{}", notes.len() + 1);
+        }
+        notes.push(Footnote {
+          id,
+          marker,
+          skip,
+          lines: vec![line],
+        });
+      }
+      None => match notes.last_mut() {
+        Some(note) => note.lines.push(line),
+        None => return Vec::new(),
+      },
+    }
+  }
+  // Só são notas se o corpo da página as referencia com um sobrescrito; senão é, por exemplo,
+  // uma legenda numerada de figura no pé da página.
+  let in_notes = |line: &Line| {
+    notes
+      .iter()
+      .any(|n| n.lines.iter().any(|l| std::ptr::eq(*l, line)))
+  };
+  let referenced = lines.iter().filter(|l| !in_notes(l)).any(|line| {
+    let text = line.text();
+    notes.iter().any(|n| {
+      let superscript = line
+        .spans
+        .iter()
+        .any(|span| line.script(span) == Script::Super && span.text.trim() == n.marker);
+      // Símbolos ("switch*") costumam vir colados à palavra, sem ser sobrescritos.
+      let symbol = !n.marker.chars().any(char::is_alphanumeric)
+        && text.match_indices(n.marker.as_str()).any(|(i, _)| {
+          text[..i]
+            .chars()
+            .next_back()
+            .is_some_and(char::is_alphanumeric)
+        });
+      superscript || symbol
+    })
+  });
+  // Notas ocupam pouco da página; um bloco grande em fonte menor é outra coisa (exercícios).
+  let top = notes
+    .iter()
+    .flat_map(|n| n.lines.iter().map(|l| l.bbox.y0))
+    .fold(f32::MAX, f32::min);
+  let bottom = notes
+    .iter()
+    .flat_map(|n| n.lines.iter().map(|l| l.bbox.y1))
+    .fold(f32::MIN, f32::max);
+  let compact = bottom - top <= page.height * 0.35;
+  if referenced && compact {
+    notes
+  } else {
+    Vec::new()
+  }
+}
+
+/// Marcador de nota no início da linha: trecho sobrescrito, ou "12 ", "3. ", "* ", "† ".
+fn footnote_marker(line: &Line) -> Option<(String, usize)> {
+  let first = line.spans.first()?;
+  let trimmed = first.text.trim();
+  if line.script(first) == Script::Super && !trimmed.is_empty() && trimmed.chars().count() <= 3 {
+    return Some((trimmed.to_string(), trimmed.chars().count()));
+  }
+  let text = line.text();
+  // "1 Texto" (não "1. Texto", que é lista de exercícios).
+  let digits = text.chars().take_while(char::is_ascii_digit).count();
+  if (1..=3).contains(&digits) {
+    return text[digits..]
+      .starts_with(' ')
+      .then(|| (text[..digits].to_string(), digits));
+  }
+  let symbol = text.chars().next()?;
+  if matches!(symbol, '*' | '†' | '‡' | '§' | '¶') && text[symbol.len_utf8()..].starts_with(' ')
+  {
+    return Some((symbol.to_string(), 1));
+  }
+  None
 }
 
 /// Escolhe em que nível de título quebrar arquivos: capítulos, ou o nível abaixo quando o topo
@@ -949,6 +1293,8 @@ mod tests {
           depth,
           content,
         } => format!("li{depth} {kind:?} {}", inline_text(content)),
+        Block::Code(code) => format!("code {code}"),
+        Block::Footnote { id, content } => format!("note {id} {}", inline_text(content)),
       })
       .collect()
   }
@@ -959,6 +1305,7 @@ mod tests {
       .map(|i| match i {
         Inline::Text { text, .. } => text.as_str(),
         Inline::Break => " / ",
+        Inline::Sup(t) | Inline::Sub(t) | Inline::FootnoteRef(t) => t.as_str(),
       })
       .collect()
   }
@@ -1088,6 +1435,131 @@ mod tests {
     );
     assert_eq!(t[2], "li1 Bullet subitem");
     assert_eq!(t[3], "li0 Number(2) segundo");
+  }
+
+  fn mono() -> Style {
+    Style {
+      mono: true,
+      ..Style::default()
+    }
+  }
+
+  fn spans_line(spans: &[(&str, f32, f32, f32, Style)], baseline: f32) -> Line {
+    // (texto, x0, tamanho, deslocamento da linha de base, estilo)
+    let spans: Vec<Span> = spans
+      .iter()
+      .map(|&(text, x0, size, shift, style)| {
+        let width = text.chars().count() as f32 * size * 0.5;
+        let base = baseline + shift;
+        Span {
+          text: text.to_string(),
+          bbox: Rect::new(x0, base - size, x0 + width, base + size * 0.25),
+          size,
+          baseline: base,
+          style,
+          space_before: false,
+        }
+      })
+      .collect();
+    let bbox = spans
+      .iter()
+      .skip(1)
+      .fold(spans[0].bbox, |a, s| a.union(&s.bbox));
+    Line {
+      spans,
+      bbox,
+      size: 11.0,
+      baseline,
+    }
+  }
+
+  #[test]
+  fn mono_lines_become_indented_code_blocks() {
+    let p = page(
+      1,
+      vec![
+        line(BODY, 11.0, 100.0),
+        line_full("for (;;) {", 11.0, 72.0, 114.0, mono()),
+        line_full("loop();", 11.0, 72.0 + 4.0 * 5.5, 128.0, mono()),
+        line_full("}", 11.0, 72.0, 142.0, mono()),
+        line(BODY, 11.0, 160.0),
+      ],
+    );
+    let t = texts(&build_blocks(&[p], &[]).blocks);
+    assert_eq!(t[1], "code for (;;) {\n    loop();\n}");
+    assert!(t[2].starts_with("p Lorem"));
+  }
+
+  #[test]
+  fn styled_spans_and_superscripts_become_inlines() {
+    let italic = Style {
+      italic: true,
+      ..Style::default()
+    };
+    let l = spans_line(
+      &[
+        ("tempo ", 72.0, 11.0, 0.0, Style::default()),
+        ("O(n", 105.0, 11.0, 0.0, italic),
+        ("2", 125.0, 7.0, -4.0, Style::default()),
+        (")", 129.0, 11.0, 0.0, Style::default()),
+      ],
+      100.0,
+    );
+    let blocks = build_blocks(&[page(1, vec![l])], &[]).blocks;
+    let Block::Paragraph(content) = &blocks[0] else {
+      panic!("{blocks:?}")
+    };
+    assert_eq!(
+      content[1],
+      Inline::Text {
+        text: "O(n".into(),
+        style: italic
+      }
+    );
+    assert_eq!(content[2], Inline::Sup("2".into()));
+  }
+
+  #[test]
+  fn footnotes_are_linked_to_their_markers() {
+    let body = spans_line(
+      &[
+        ("Um texto com nota", 72.0, 11.0, 0.0, Style::default()),
+        ("1", 166.0, 7.0, -4.0, Style::default()),
+        (" e mais.", 170.0, 11.0, 0.0, Style::default()),
+      ],
+      100.0,
+    );
+    let note = spans_line(
+      &[("1 A nota de rodapé.", 72.0, 8.0, 0.0, Style::default())],
+      740.0,
+    );
+    let mut note = note;
+    note.size = 8.0;
+    let s = build_blocks(&[page(7, vec![body, line(BODY, 11.0, 114.0), note])], &[]);
+    let t = texts(&s.blocks);
+    assert!(
+      t.iter()
+        .any(|b| b.starts_with("p Um texto com nota7-1 e mais.")),
+      "{t:?}"
+    );
+    assert!(
+      t.contains(&"note 7-1 A nota de rodapé.".to_string()),
+      "{t:?}"
+    );
+  }
+
+  #[test]
+  fn numbered_exercises_at_page_bottom_are_not_footnotes() {
+    let mut ex = line_full(
+      "1. Qual é a função de um sistema operacional?",
+      8.0,
+      72.0,
+      740.0,
+      Style::default(),
+    );
+    ex.size = 8.0;
+    let s = build_blocks(&[page(3, vec![line(BODY, 11.0, 100.0), ex])], &[]);
+    assert!(!s.blocks.iter().any(|b| matches!(b, Block::Footnote { .. })));
   }
 
   #[test]

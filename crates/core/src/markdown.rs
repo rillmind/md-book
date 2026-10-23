@@ -10,13 +10,22 @@ use crate::text::ListKind;
 pub fn render_chapter(chapter: &Chapter) -> String {
   let mut out = format!("# {}\n\n", escape_heading(&chapter.title));
   let mut in_list = false;
+  let mut notes = Vec::new();
   for block in &chapter.blocks {
     let is_item = matches!(block, Block::ListItem { .. });
-    if in_list && !is_item {
+    if in_list && !is_item && !matches!(block, Block::Footnote { .. }) {
       out.push('\n');
     }
-    in_list = is_item;
+    if !matches!(block, Block::Footnote { .. }) {
+      in_list = is_item;
+    }
     match block {
+      Block::Code(code) => {
+        let longest = code.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+        let fence = "`".repeat(longest.max(2) + 1);
+        out.push_str(&format!("{fence}\n{code}\n{fence}\n\n"));
+      }
+      Block::Footnote { id, content } => notes.push((id, content)),
       Block::Heading { level, text } => {
         let hashes = (level.saturating_sub(chapter.depth) + 1).clamp(2, 6) as usize;
         out.push_str(&format!(
@@ -46,6 +55,13 @@ pub fn render_chapter(chapter: &Chapter) -> String {
       }
     }
   }
+  if in_list {
+    out.push('\n');
+  }
+  // Notas de rodapé no fim do capítulo, como o mdBook as exibe.
+  for (id, content) in notes {
+    out.push_str(&format!("[^{id}]: {}\n\n", render_inlines(content)));
+  }
   let trimmed = out.trim_end().len();
   out.truncate(trimmed);
   out.push('\n');
@@ -54,24 +70,40 @@ pub fn render_chapter(chapter: &Chapter) -> String {
 
 /// Renderiza trechos com estilo, juntando os vizinhos de mesmo estilo.
 pub fn render_inlines(content: &[Inline]) -> String {
-  let mut runs: Vec<Option<(String, Style)>> = Vec::new();
+  enum Run {
+    Text(String, Style),
+    /// Markdown/HTML já pronto (sobrescrito, referência de nota).
+    Raw(String),
+    Break,
+  }
+  let mut runs: Vec<Run> = Vec::new();
   for inline in content {
     match inline {
       Inline::Text { text, style } => match runs.last_mut() {
-        Some(Some((prev, prev_style))) if prev_style == style => prev.push_str(text),
-        _ => runs.push(Some((text.clone(), *style))),
+        Some(Run::Text(prev, prev_style)) if prev_style == style => prev.push_str(text),
+        _ => runs.push(Run::Text(text.clone(), *style)),
       },
-      Inline::Break => runs.push(None),
+      Inline::Break => runs.push(Run::Break),
+      Inline::Sup(t) => runs.push(Run::Raw(format!("<sup>{}</sup>", escape_text(t)))),
+      Inline::Sub(t) => runs.push(Run::Raw(format!("<sub>{}</sub>", escape_text(t)))),
+      Inline::FootnoteRef(id) => runs.push(Run::Raw(format!("[^{id}]"))),
     }
   }
   let mut out = String::new();
   for run in runs {
-    let Some((text, style)) = run else {
-      // Quebra de linha explícita do CommonMark.
-      let trimmed = out.trim_end().len();
-      out.truncate(trimmed);
-      out.push_str("\\\n");
-      continue;
+    let (text, style) = match run {
+      Run::Text(text, style) => (text, style),
+      Run::Raw(raw) => {
+        out.push_str(&raw);
+        continue;
+      }
+      Run::Break => {
+        // Quebra de linha explícita do CommonMark.
+        let trimmed = out.trim_end().len();
+        out.truncate(trimmed);
+        out.push_str("\\\n");
+        continue;
+      }
     };
     let text: String = text.chars().filter(|&c| c != '\u{ad}').collect();
     let text = if out.ends_with('\n') {
@@ -325,6 +357,30 @@ mod tests {
     assert_eq!(
       render_paragraph(&content),
       "primeiro verso\\\n\\- segundo verso"
+    );
+  }
+
+  #[test]
+  fn renders_code_blocks_scripts_and_footnotes() {
+    let c = chapter(vec![
+      Block::Paragraph(vec![
+        Inline::plain("O(n"),
+        Inline::Sup("2".into()),
+        Inline::plain(") e H"),
+        Inline::Sub("2".into()),
+        Inline::plain("O, ver nota"),
+        Inline::FootnoteRef("3-1".into()),
+        Inline::plain("."),
+      ]),
+      Block::Footnote {
+        id: "3-1".into(),
+        content: vec![Inline::plain("A nota.")],
+      },
+      Block::Code("fn main() {\n    let x = 1;\n}".into()),
+    ]);
+    assert_eq!(
+      render_chapter(&c),
+      "# Capítulo 1\n\nO(n<sup>2</sup>) e H<sub>2</sub>O, ver nota[^3-1].\n\n```\nfn main() {\n    let x = 1;\n}\n```\n\n[^3-1]: A nota.\n"
     );
   }
 
