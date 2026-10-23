@@ -2,7 +2,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::layout::PageContent;
+use crate::figures::Figure;
+use crate::layout::{Element, PageContent};
 use crate::model::{Line, Script, Style};
 use crate::outline::OutlineEntry;
 use crate::text::{self, ListKind, Vocabulary};
@@ -47,6 +48,11 @@ pub enum Block {
   },
   /// Bloco de código (linhas em fonte monoespaçada), com a indentação reconstruída.
   Code(String),
+  /// Figura; `file` é o nome do arquivo no diretório de recursos do livro.
+  Image {
+    file: String,
+    alt: String,
+  },
   /// Nota de rodapé; o Markdown a coloca no fim do capítulo.
   Footnote {
     id: String,
@@ -98,6 +104,7 @@ enum Item<'a> {
     size: Option<f32>,
   },
   Line(&'a Line),
+  Figure(&'a Figure),
 }
 
 /// Monta os blocos do livro inteiro, usando o outline quando houver e parecer completo.
@@ -107,15 +114,23 @@ pub fn build_blocks(pages: &[PageContent], outline: &[OutlineEntry]) -> Structur
   for line in pages.iter().flat_map(PageContent::lines) {
     vocabulary.add_line(&line.text());
   }
-  let font: Vec<Vec<Item>> = pages.iter().map(|p| font_items(p, &fonts)).collect();
+  let font: Vec<Vec<Item>> = pages
+    .iter()
+    .map(|p| with_figures(p, font_items(p, &fonts)))
+    .collect();
 
   if !outline.is_empty() {
     let placed = place_outline(pages, outline, &fonts);
     let ignored = outline_misses_chapters(pages, outline, &font, placed.max_matched_size);
+    let outline_items: Vec<Vec<Item>> = pages
+      .iter()
+      .zip(placed.items)
+      .map(|(p, items)| with_figures(p, items))
+      .collect();
     let (items, source) = if ignored {
       (&font, HeadingSource::FontSize)
     } else {
-      (&placed.items, HeadingSource::Outline)
+      (&outline_items, HeadingSource::Outline)
     };
     return Structured {
       blocks: assemble(pages, items, &fonts, &vocabulary),
@@ -137,6 +152,42 @@ pub fn build_blocks(pages: &[PageContent], outline: &[OutlineEntry]) -> Structur
     },
     outline_ignored: false,
   }
+}
+
+/// Encaixa as figuras da página entre os itens, antes da linha que as segue na ordem de leitura.
+fn with_figures<'a>(page: &'a PageContent, items: Vec<Item<'a>>) -> Vec<Item<'a>> {
+  let mut anchored: Vec<(Option<&'a Line>, &'a Figure)> = Vec::new();
+  let mut waiting: Vec<&'a Figure> = Vec::new();
+  for element in &page.elements {
+    match element {
+      Element::Figure(figure) => waiting.push(figure),
+      Element::Line(line) => anchored.extend(waiting.drain(..).map(|f| (Some(line), f))),
+    }
+  }
+  anchored.extend(waiting.into_iter().map(|f| (None, f)));
+  if anchored.is_empty() {
+    return items;
+  }
+  let mut placed = vec![false; anchored.len()];
+  let mut out = Vec::with_capacity(items.len() + anchored.len());
+  for item in items {
+    if let Item::Line(line) = &item {
+      for (i, (anchor, figure)) in anchored.iter().enumerate() {
+        if !placed[i] && anchor.is_some_and(|a| std::ptr::eq(a, *line)) {
+          out.push(Item::Figure(figure));
+          placed[i] = true;
+        }
+      }
+    }
+    out.push(item);
+  }
+  // Figuras cuja linha seguinte virou título (ou no fim da página).
+  for (i, (_, figure)) in anchored.iter().enumerate() {
+    if !placed[i] {
+      out.push(Item::Figure(figure));
+    }
+  }
+  out
 }
 
 fn size_key(size: f32) -> u32 {
@@ -675,6 +726,18 @@ impl Assembler<'_> {
     code.lines.push((line.bbox.x0, line.text(), blank));
   }
 
+  /// A figura não interrompe um parágrafo que continua depois dela (texto que contorna a figura).
+  fn figure(&mut self, figure: &Figure) {
+    if self.current.as_ref().is_none_or(Current::ends_sentence) {
+      self.close_text();
+    }
+    self.close_code();
+    self.blocks.push(Block::Image {
+      file: figure.file.clone(),
+      alt: figure.alt.clone(),
+    });
+  }
+
   fn footnote(&mut self, id: String, content: Vec<Inline>) {
     self.blocks.push(Block::Footnote { id, content });
   }
@@ -1044,6 +1107,7 @@ fn assemble(
           asm.heading(*level, text);
           prev = None;
         }
+        Item::Figure(figure) => asm.figure(figure),
         Item::Line(line)
           if notes
             .iter()
@@ -1294,6 +1358,7 @@ mod tests {
           content,
         } => format!("li{depth} {kind:?} {}", inline_text(content)),
         Block::Code(code) => format!("code {code}"),
+        Block::Image { file, .. } => format!("img {file}"),
         Block::Footnote { id, content } => format!("note {id} {}", inline_text(content)),
       })
       .collect()

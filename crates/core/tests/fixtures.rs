@@ -97,3 +97,43 @@ fn writes_mdbook_project() {
 
   std::fs::remove_dir_all(&out).unwrap();
 }
+
+#[test]
+fn extracts_photo_and_vector_figure_with_captions() {
+  let book = convert("figuras.pdf");
+  let blocks: Vec<&Block> = book.chapters.iter().flat_map(|c| &c.blocks).collect();
+  let images: Vec<(&String, &String)> = blocks
+    .iter()
+    .filter_map(|b| match b {
+      Block::Image { file, alt } => Some((file, alt)),
+      _ => None,
+    })
+    .collect();
+  assert_eq!(images.len(), 2, "{blocks:?}");
+  // A foto é copiada como veio no PDF; o diagrama é renderizado.
+  assert!(images[0].0.starts_with("img-"));
+  assert!(images[1].0.starts_with("fig-") && images[1].0.ends_with(".png"));
+  assert!(images[0].1.starts_with("Figura 1.1"));
+  assert!(images[1].1.starts_with("Figura 1.2"));
+
+  // Os rótulos do diagrama ficam só na imagem (a legenda continua no texto).
+  let paragraphs: Vec<String> = blocks
+    .iter()
+    .filter_map(|b| match b {
+      Block::Paragraph(content) => Some(format!("{content:?}")),
+      _ => None,
+    })
+    .filter(|p| !p.contains("Figura"))
+    .collect();
+  assert!(paragraphs.iter().all(|p| !p.contains("Cliente") && !p.contains("Servidor")));
+
+  let out = std::env::temp_dir().join(format!("mdbook-gen-fig-{}", std::process::id()));
+  let _ = std::fs::remove_dir_all(&out);
+  let written = write_book(&book, &out, false).unwrap();
+  assert_eq!(written.images, 2);
+  assert_eq!(
+    std::fs::read_dir(out.join("src/images")).unwrap().count(),
+    2
+  );
+  std::fs::remove_dir_all(&out).unwrap();
+}

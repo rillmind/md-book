@@ -4,12 +4,11 @@
 //! [`analyze`] lê o PDF e monta o [`Book`] em memória; [`write_book`] grava em disco.
 
 mod book;
-#[allow(dead_code)] // imagens e sobrescritos entram nas próximas etapas
 mod extract;
+mod figures;
 mod furniture;
 mod layout;
 mod markdown;
-#[allow(dead_code)]
 mod model;
 mod outline;
 mod pdfium;
@@ -17,6 +16,7 @@ mod structure;
 mod text;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub use book::{WrittenBook, write_book};
 pub use markdown::render_chapter;
@@ -90,6 +90,8 @@ pub struct Book {
   pub outline_ignored: bool,
   /// Páginas que o parser não conseguiu ler (ficaram de fora).
   pub failed_pages: Vec<u32>,
+  /// Diretório temporário com as imagens extraídas; apagado quando o livro é descartado.
+  pub assets: Option<Arc<tempfile::TempDir>>,
 }
 
 /// Lê o PDF e monta o livro.
@@ -120,7 +122,32 @@ pub fn analyze(
   progress(Progress::Structuring);
   furniture::remove_headers_and_footers(&mut pages);
   furniture::remove_reference_pages(&mut pages);
-  let contents: Vec<layout::PageContent> = pages.into_iter().map(layout::arrange).collect();
+  let body = body_size(&pages);
+  let ignore = figures::Ignore {
+    images: figures::decorative_assets(&extracted.assets),
+    paths: figures::repeated_paths(&pages),
+    regions: Vec::new(),
+  };
+  let mut candidates: Vec<_> = pages
+    .iter()
+    .map(|page| figures::detect(page, &ignore, body))
+    .collect();
+  figures::drop_repeated(&mut candidates);
+  let contents: Vec<layout::PageContent> = pages
+    .into_iter()
+    .zip(candidates)
+    .map(|(mut page, candidates)| {
+      let found = figures::extract_figures(
+        &document,
+        &mut page,
+        candidates,
+        &extracted.assets,
+        body,
+        assets.path(),
+      );
+      layout::arrange(page, found)
+    })
+    .collect();
   let outline = if options.use_outline {
     outline::read_outline(&document)
   } else {
@@ -155,7 +182,20 @@ pub fn analyze(
     heading_source: structured.source,
     outline_ignored: structured.outline_ignored,
     failed_pages,
+    assets: Some(Arc::new(assets)),
   })
+}
+
+/// Tamanho de fonte do corpo do texto: o mais frequente, por quantidade de caracteres.
+fn body_size(pages: &[model::Page]) -> f32 {
+  let mut chars: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+  for line in pages.iter().flat_map(|p| &p.lines) {
+    *chars.entry((line.size * 2.0).round() as u32).or_default() += line.char_count();
+  }
+  chars
+    .into_iter()
+    .max_by_key(|&(size, n)| (n, size))
+    .map_or(0.0, |(size, _)| size as f32 / 2.0)
 }
 
 fn file_stem(path: &Path) -> String {

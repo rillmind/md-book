@@ -45,3 +45,41 @@ lo("--convert-to",
    "livro.html")
 subprocess.run(["mv", "livro.pdf", "sem-outline.pdf"], check=True)
 subprocess.run(["rm", "livro.html", "livro.odt"], check=True)
+
+
+def png(path, w, h):
+    """PNG em degradê, sem depender de bibliotecas de imagem."""
+    import struct
+    import zlib
+    rows = b"".join(
+        b"\x00" + b"".join(bytes((x * 255 // w, y * 255 // h, 128)) for x in range(w)) for y in range(h)
+    )
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
+    ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
+    open(path, "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+
+# Figuras: uma foto (raster) e um diagrama vetorial com rótulos.
+png("foto.png", 320, 200)
+open("diagrama.svg", "w").write("""<svg xmlns="http://www.w3.org/2000/svg" width="400" height="160">
+<rect x="10" y="40" width="120" height="60" fill="none" stroke="black" stroke-width="2"/>
+<text x="35" y="75" font-size="14">Cliente</text>
+<line x1="130" y1="70" x2="270" y2="70" stroke="black" stroke-width="2"/>
+<polygon points="270,64 282,70 270,76" fill="black"/>
+<rect x="282" y="40" width="110" height="60" fill="none" stroke="black" stroke-width="2"/>
+<text x="302" y="75" font-size="14">Servidor</text>
+</svg>""")
+html = ['<html><head><meta charset="utf-8"><title>Figuras</title></head><body>',
+        '<h1>1 Figuras</h1>', para(4),
+        '<p><img src="foto.png" width="320" height="200"></p>',
+        '<p>Figura 1.1 Uma foto em degradê.</p>', para(3),
+        '<p><img src="diagrama.svg" width="400" height="160"></p>',
+        '<p>Figura 1.2 Cliente e servidor.</p>', para(3),
+        '</body></html>']
+open("figuras.html", "w").write("\n".join(html))
+lo("--infilter=HTML (StarWriter)", "--convert-to", "odt", "figuras.html")
+lo("--convert-to", "pdf", "figuras.odt")
+subprocess.run(["rm", "figuras.html", "figuras.odt", "foto.png", "diagrama.svg"], check=True)

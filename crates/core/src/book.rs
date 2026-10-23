@@ -4,7 +4,8 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::markdown::{escape_link_text, render_chapter};
+use crate::markdown::{IMAGES_DIR, escape_link_text, render_chapter};
+use crate::structure::Block;
 use crate::{Book, Error};
 
 /// Arquivos gerados por [`write_book`].
@@ -12,9 +13,11 @@ use crate::{Book, Error};
 pub struct WrittenBook {
   pub root: PathBuf,
   pub chapter_files: Vec<PathBuf>,
+  /// Imagens copiadas para `src/images`.
+  pub images: usize,
 }
 
-/// Escreve `book.toml`, `src/SUMMARY.md` e um arquivo por capítulo em `out_dir`.
+/// Escreve `book.toml`, `src/SUMMARY.md`, um arquivo por capítulo e as imagens em `out_dir`.
 ///
 /// Recusa um diretório não vazio, a menos que `force` seja verdadeiro; nesse caso
 /// `src/` é recriado do zero para não sobrarem capítulos antigos.
@@ -45,10 +48,29 @@ pub fn write_book(book: &Book, out_dir: &Path, force: bool) -> Result<WrittenBoo
   }
   fs::write(src.join("SUMMARY.md"), summary)?;
 
+  let images = copy_images(book, &src.join(IMAGES_DIR))?;
   Ok(WrittenBook {
     root: out_dir.to_path_buf(),
     chapter_files,
+    images,
   })
+}
+
+/// Copia do diretório de recursos só as imagens que algum capítulo usa.
+fn copy_images(book: &Book, dest: &Path) -> Result<usize, Error> {
+  let Some(assets) = &book.assets else {
+    return Ok(0);
+  };
+  let mut copied = std::collections::HashSet::new();
+  for block in book.chapters.iter().flat_map(|c| &c.blocks) {
+    if let Block::Image { file, .. } = block
+      && copied.insert(file.clone())
+    {
+      fs::create_dir_all(dest)?;
+      fs::copy(assets.path().join(file), dest.join(file))?;
+    }
+  }
+  Ok(copied.len())
 }
 
 fn book_toml(book: &Book) -> String {

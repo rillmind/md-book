@@ -7,6 +7,9 @@ use crate::model::Style;
 use crate::structure::{Block, Chapter, Inline};
 use crate::text::ListKind;
 
+/// Diretório das imagens, relativo a `src/` (onde ficam os capítulos).
+pub const IMAGES_DIR: &str = "images";
+
 pub fn render_chapter(chapter: &Chapter) -> String {
   let mut out = format!("# {}\n\n", escape_heading(&chapter.title));
   let mut in_list = false;
@@ -26,6 +29,12 @@ pub fn render_chapter(chapter: &Chapter) -> String {
         out.push_str(&format!("{fence}\n{code}\n{fence}\n\n"));
       }
       Block::Footnote { id, content } => notes.push((id, content)),
+      Block::Image { file, alt } => {
+        out.push_str(&format!(
+          "![{}]({IMAGES_DIR}/{file})\n\n",
+          escape_link_text(alt)
+        ));
+      }
       Block::Heading { level, text } => {
         let hashes = (level.saturating_sub(chapter.depth) + 1).clamp(2, 6) as usize;
         out.push_str(&format!(

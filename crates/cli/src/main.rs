@@ -89,8 +89,9 @@ fn main() -> Result<()> {
     HeadingSource::None => "nenhum título detectado",
   };
   println!(
-    "{} capítulo(s) em {} (títulos: {source})",
+    "{} capítulo(s) e {} imagem(ns) em {} (títulos: {source})",
     written.chapter_files.len(),
+    written.images,
     written.root.display()
   );
   if book.outline_ignored {

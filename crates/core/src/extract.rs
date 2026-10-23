@@ -45,8 +45,9 @@ pub fn extract(
     let number = index as u32 + 1;
     let width = page.width().value;
     let height = page.height().value;
+    let origin = Origin::of(&page);
     let lines = match page.text() {
-      Ok(text) => extract_lines(&text, height),
+      Ok(text) => extract_lines(&text, origin),
       Err(_) => {
         out.failed.push(number);
         Vec::new()
@@ -55,7 +56,7 @@ pub fn extract(
     let mut graphics = Vec::new();
     let mut ctx = GraphicsCtx {
       document,
-      height,
+      origin,
       number,
       assets_dir,
       assets: &mut out.assets,
@@ -76,7 +77,44 @@ pub fn extract(
   out
 }
 
-fn extract_lines(text: &PdfPageText, page_height: f32) -> Vec<Line> {
+/// Canto superior esquerdo da área visível da página (CropBox, ou MediaBox): livros de gráfica
+/// têm sangria e marcas de corte, e a renderização começa nesse canto, não na origem do PDF.
+#[derive(Clone, Copy)]
+struct Origin {
+  left: f32,
+  top: f32,
+}
+
+impl Origin {
+  fn of(page: &PdfPage) -> Self {
+    let boundaries = page.boundaries();
+    match boundaries.crop().or_else(|_| boundaries.media()) {
+      Ok(b) => Self {
+        left: b.bounds.left().value,
+        top: b.bounds.top().value,
+      },
+      Err(_) => Self {
+        left: 0.0,
+        top: page.height().value,
+      },
+    }
+  }
+
+  fn rect(&self, left: f32, top: f32, right: f32, bottom: f32) -> Rect {
+    Rect::new(
+      left - self.left,
+      self.top - top,
+      right - self.left,
+      self.top - bottom,
+    )
+  }
+
+  fn y(&self, y: f32) -> f32 {
+    self.top - y
+  }
+}
+
+fn extract_lines(text: &PdfPageText, origin: Origin) -> Vec<Line> {
   let mut builder = LineBuilder::default();
   let mut fonts = FontCache::default();
   for ch in text.chars().iter() {
@@ -108,20 +146,17 @@ fn extract_lines(text: &PdfPageText, page_height: f32) -> Vec<Line> {
     let Ok(bounds) = ch.loose_bounds() else {
       continue;
     };
-    let rect = Rect::new(
+    let rect = origin.rect(
       bounds.left().value,
-      page_height - bounds.top().value,
+      bounds.top().value,
       bounds.right().value,
-      page_height - bounds.bottom().value,
+      bounds.bottom().value,
     );
     let mut size = ch.scaled_font_size().value;
     if size <= 0.0 {
       size = rect.height();
     }
-    let baseline = ch
-      .origin_y()
-      .map(|y| page_height - y.value)
-      .unwrap_or(rect.y1);
+    let baseline = ch.origin_y().map(|y| origin.y(y.value)).unwrap_or(rect.y1);
     let style = fonts.style(&ch);
     builder.push(c, rect, size, baseline, style);
   }
@@ -361,7 +396,7 @@ impl LineBuilder {
 
 struct GraphicsCtx<'a, 'd> {
   document: &'a PdfDocument<'d>,
-  height: f32,
+  origin: Origin,
   number: u32,
   assets_dir: &'a Path,
   assets: &'a mut Vec<ImageAsset>,
@@ -371,11 +406,11 @@ struct GraphicsCtx<'a, 'd> {
 impl GraphicsCtx<'_, '_> {
   fn rect(&self, object: &PdfPageObject) -> Option<Rect> {
     let b = object.bounds().ok()?;
-    Some(Rect::new(
+    Some(self.origin.rect(
       b.left().value,
-      self.height - b.top().value,
+      b.top().value,
       b.right().value,
-      self.height - b.bottom().value,
+      b.bottom().value,
     ))
   }
 
