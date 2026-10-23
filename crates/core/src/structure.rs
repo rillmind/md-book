@@ -794,9 +794,15 @@ impl Assembler<'_> {
       return;
     }
 
+    // Subir na página é mudar de coluna: vale como virada de página.
+    let prev = prev.filter(|p| line.baseline >= p.baseline - p.size);
+    if prev.is_none() && self.current.as_ref().is_some_and(Current::ends_sentence) {
+      self.close_text();
+    }
     let wide_gap = prev.is_some_and(|p| {
-      let delta = line.baseline - p.baseline;
-      delta < -p.size || stats.gap.is_some_and(|g| delta > g * PARAGRAPH_GAP_RATIO)
+      stats
+        .gap
+        .is_some_and(|g| line.baseline - p.baseline > g * PARAGRAPH_GAP_RATIO)
     });
     // Linha alinhada ao texto do item (recuo deslocado) continua o item.
     let continues_item = match &self.current {
@@ -905,10 +911,19 @@ fn line_inlines(
     first = false;
     let trimmed = span.text.trim();
     match line.script(span) {
-      Script::Super if !trimmed.is_empty() => match notes.get(trimmed) {
-        Some(id) => out.push(Inline::FootnoteRef(id.clone())),
-        None => out.push(Inline::Sup(trimmed.to_string())),
-      },
+      Script::Super if !trimmed.is_empty() => {
+        // Depois de variável em itálico, algarismo ou parêntese é expoente, não nota: O(n²).
+        let exponent = i > 0 && {
+          let prev = &line.spans[i - 1];
+          let last = prev.text.trim_end().chars().next_back();
+          !span.space_before
+            && (prev.style.italic || last.is_some_and(|c| c.is_ascii_digit() || c == ')'))
+        };
+        match notes.get(trimmed) {
+          Some(id) if !exponent => out.push(Inline::FootnoteRef(id.clone())),
+          _ => out.push(Inline::Sup(trimmed.to_string())),
+        }
+      }
       Script::Sub if !trimmed.is_empty() => out.push(Inline::Sub(trimmed.to_string())),
       _ => push_text(
         &mut out,

@@ -331,7 +331,12 @@ impl LineBuilder {
     }
 
     let gap = rect.x0 - self.last_x1;
-    let space_before = self.pending_space || (!self.spans.is_empty() && gap > size * 0.5);
+    // Capitular (letra inicial grande) emenda na palavra sem espaço: "U" + "m computador".
+    let after_drop_cap = self.spans.len() == 1
+      && self.spans[0].text.chars().count() == 1
+      && self.spans[0].size >= size * 1.8;
+    let space_before =
+      !after_drop_cap && (self.pending_space || (!self.spans.is_empty() && gap > size * 0.5));
     let new_span = match self.spans.last() {
       None => true,
       Some(span) => {
@@ -385,11 +390,16 @@ impl LineBuilder {
       .max_by_key(|&(size, count)| (count, size))
       .map(|(size, _)| size as f32 / 2.0)
       .unwrap_or(self.line_size);
+    // Linha de base do texto de tamanho dominante (não a de uma capitular ou expoente).
+    let baseline = spans
+      .iter()
+      .find(|s| ((s.size * 2.0).round() / 2.0 - size).abs() < 0.3)
+      .map_or(self.line_baseline, |s| s.baseline);
     self.lines.push(Line {
       spans,
       bbox,
       size,
-      baseline: self.line_baseline,
+      baseline,
     });
   }
 }

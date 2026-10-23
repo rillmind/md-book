@@ -125,7 +125,11 @@ fn extracts_photo_and_vector_figure_with_captions() {
     })
     .filter(|p| !p.contains("Figura"))
     .collect();
-  assert!(paragraphs.iter().all(|p| !p.contains("Cliente") && !p.contains("Servidor")));
+  assert!(
+    paragraphs
+      .iter()
+      .all(|p| !p.contains("Cliente") && !p.contains("Servidor"))
+  );
 
   let out = std::env::temp_dir().join(format!("mdbook-gen-fig-{}", std::process::id()));
   let _ = std::fs::remove_dir_all(&out);
