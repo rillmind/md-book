@@ -28,9 +28,9 @@ struct Cli {
   #[arg(long)]
   language: Option<String>,
 
-  /// Títulos até este nível viram arquivos separados (1 = só capítulos).
-  #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=6))]
-  split_level: u8,
+  /// Títulos até este nível viram arquivos separados (1 = só capítulos) [padrão: automático]
+  #[arg(long, value_parser = clap::value_parser!(u8).range(1..=6))]
+  split_level: Option<u8>,
 
   /// Ignora os bookmarks do PDF e detecta títulos só pelo tamanho da fonte.
   #[arg(long)]

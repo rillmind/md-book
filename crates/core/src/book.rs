@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::markdown::{escape_inline, render_chapter};
+use crate::markdown::{escape_link_text, render_chapter};
 use crate::{Book, Error};
 
 /// Arquivos gerados por [`write_book`].
@@ -36,7 +36,7 @@ pub fn write_book(book: &Book, out_dir: &Path, force: bool) -> Result<WrittenBoo
   let mut chapter_files = Vec::with_capacity(names.len());
   for (chapter, name) in book.chapters.iter().zip(&names) {
     let indent = "    ".repeat(chapter.depth.saturating_sub(1) as usize);
-    let title = escape_inline(&chapter.title);
+    let title = escape_link_text(&chapter.title);
     writeln!(summary, "{indent}- [{title}](./{name})").unwrap();
 
     let path = src.join(name);

@@ -60,9 +60,7 @@ fn destination_page(bookmark: &PdfBookmark) -> Option<u32> {
 
 /// Título dos metadados do PDF, se existir e não for vazio.
 pub fn read_title(document: &PdfDocument) -> Option<String> {
-  let tag = document
-    .metadata()
-    .get(PdfDocumentMetadataTagType::Title)?;
+  let tag = document.metadata().get(PdfDocumentMetadataTagType::Title)?;
   let title = tag.value().trim();
   (!title.is_empty()).then(|| title.to_string())
 }

@@ -42,7 +42,7 @@ fn assert_chapters(book: &Book) {
     let items = chapter
       .blocks
       .iter()
-      .filter(|b| matches!(b, Block::ListItem(_)))
+      .filter(|b| matches!(b, Block::ListItem { .. }))
       .count();
     let paragraphs = chapter
       .blocks

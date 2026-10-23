@@ -4,20 +4,26 @@
 //! [`analyze`] lê o PDF e monta o [`Book`] em memória; [`write_book`] grava em disco.
 
 mod book;
+#[allow(dead_code)] // imagens e sobrescritos entram nas próximas etapas
 mod extract;
+mod furniture;
+mod layout;
 mod markdown;
-#[allow(dead_code)] // partes do modelo usadas pelas próximas etapas do pipeline
+#[allow(dead_code)]
 mod model;
 mod outline;
 mod pdfium;
 mod structure;
+mod text;
 
 use std::path::{Path, PathBuf};
 
 pub use book::{WrittenBook, write_book};
 pub use markdown::render_chapter;
+pub use model::Style;
 pub use pdfium::PDFIUM_ENV;
-pub use structure::{Block, Chapter, FRONT_MATTER_TITLE, HeadingSource};
+pub use structure::{Block, Chapter, FRONT_MATTER_TITLE, HeadingSource, Inline};
+pub use text::ListKind;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -41,8 +47,9 @@ pub enum Error {
 pub struct Options {
   /// Usa os bookmarks do PDF para achar capítulos, quando existirem.
   pub use_outline: bool,
-  /// Títulos de nível `<= split_level` começam um novo arquivo.
-  pub split_level: u8,
+  /// Títulos de nível `<= split_level` começam um novo arquivo; `None` escolhe sozinho
+  /// (capítulos, ou capítulos dentro de partes).
+  pub split_level: Option<u8>,
   /// Sobrescreve o título vindo dos metadados do PDF.
   pub title: Option<String>,
   pub authors: Vec<String>,
@@ -53,7 +60,7 @@ impl Default for Options {
   fn default() -> Self {
     Self {
       use_outline: true,
-      split_level: 1,
+      split_level: None,
       title: None,
       authors: Vec::new(),
       language: None,
@@ -105,21 +112,22 @@ pub fn analyze(
     progress(Progress::Page { done, total })
   });
   let failed_pages = extracted.failed;
-  let mut pages = structure::text_pages(&extracted.pages);
-  drop(extracted.pages);
+  let mut pages = extracted.pages;
   if pages.iter().all(|p| p.lines.is_empty()) {
     return Err(Error::NoText);
   }
 
   progress(Progress::Structuring);
-  structure::remove_page_furniture(&mut pages);
+  furniture::remove_headers_and_footers(&mut pages);
+  furniture::remove_reference_pages(&mut pages);
+  let contents: Vec<layout::PageContent> = pages.into_iter().map(layout::arrange).collect();
   let outline = if options.use_outline {
     outline::read_outline(&document)
   } else {
     Vec::new()
   };
-  let structured = structure::build_blocks(&pages, &outline);
-  drop(pages);
+  let structured = structure::build_blocks(&contents, &outline);
+  drop(contents);
 
   let title = options
     .title
@@ -127,7 +135,11 @@ pub fn analyze(
     .or_else(|| outline::read_title(&document))
     .unwrap_or_else(|| file_stem(input));
 
-  let mut chapters = structure::split_chapters(structured.blocks, options.split_level.max(1));
+  let split_level = options
+    .split_level
+    .unwrap_or_else(|| structure::auto_split_level(&structured.blocks))
+    .max(1);
+  let mut chapters = structure::split_chapters(structured.blocks, split_level);
   // Sem nenhum capítulo detectado, o livro inteiro leva o nome do livro.
   if let [only] = chapters.as_mut_slice()
     && only.title == FRONT_MATTER_TITLE
@@ -151,4 +163,51 @@ fn file_stem(path: &Path) -> String {
     .file_stem()
     .map(|s| s.to_string_lossy().into_owned())
     .unwrap_or_else(|| "Livro".into())
+}
+
+/// Diagnóstico: linhas extraídas de uma página, com posição, tamanho e estilo de cada trecho.
+#[doc(hidden)]
+pub fn debug_page(input: &Path, page: u32) -> Result<String, Error> {
+  use std::fmt::Write as _;
+  let document = pdfium::pdfium()?
+    .load_pdf_from_file(input, None)
+    .map_err(|e| Error::Pdf(e.to_string()))?;
+  let assets = tempfile::tempdir()?;
+  let extracted = extract::extract(&document, assets.path(), |_, _| {});
+  let mut out = String::new();
+  let Some(p) = extracted.pages.get(page.saturating_sub(1) as usize) else {
+    return Ok(out);
+  };
+  for line in &p.lines {
+    writeln!(
+      out,
+      "[{:6.1} {:6.1} {:6.1} base={:6.1} size={:4.1}] {}",
+      line.bbox.x0,
+      line.bbox.x1,
+      line.bbox.y0,
+      line.baseline,
+      line.size,
+      line.text()
+    )
+    .unwrap();
+    for span in &line.spans {
+      let s = span.style;
+      writeln!(
+        out,
+        "    {:6.1}-{:6.1} {:4.1} {}{}{} {:?}",
+        span.bbox.x0,
+        span.bbox.x1,
+        span.size,
+        if s.bold { "B" } else { "-" },
+        if s.italic { "I" } else { "-" },
+        if s.mono { "M" } else { "-" },
+        span.text
+      )
+      .unwrap();
+    }
+  }
+  for g in &p.graphics {
+    writeln!(out, "graphic {:?} {:?}", g.kind, g.bbox).unwrap();
+  }
+  Ok(out)
 }

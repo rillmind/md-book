@@ -28,7 +28,11 @@ const MIN_IMAGE_PX: i32 = 16;
 /// Profundidade máxima de XObjects aninhados.
 const MAX_FORM_DEPTH: usize = 8;
 
-pub fn extract(document: &PdfDocument, assets_dir: &Path, mut on_page: impl FnMut(u32, u32)) -> Extracted {
+pub fn extract(
+  document: &PdfDocument,
+  assets_dir: &Path,
+  mut on_page: impl FnMut(u32, u32),
+) -> Extracted {
   let total = document.pages().len() as u32;
   let mut out = Extracted {
     pages: Vec::with_capacity(total as usize),
@@ -79,7 +83,7 @@ fn extract_lines(text: &PdfPageText, page_height: f32) -> Vec<Line> {
     let Some(c) = ch.unicode_char() else { continue };
     match c {
       '\n' | '\r' => {
-        builder.end_line();
+        builder.line_break();
         continue;
       }
       // O PDFium usa 0x02 para hífen de fim de linha.
@@ -95,10 +99,15 @@ fn extract_lines(text: &PdfPageText, page_height: f32) -> Vec<Line> {
       _ => {}
     }
     // Texto girado (marcas d'água, legendas verticais) não faz parte do fluxo.
-    if ch.angle_degrees().is_ok_and(|a| a.abs() > 1.0 && (a - 360.0).abs() > 1.0) {
+    if ch
+      .angle_degrees()
+      .is_ok_and(|a| a.abs() > 1.0 && (a - 360.0).abs() > 1.0)
+    {
       continue;
     }
-    let Ok(bounds) = ch.loose_bounds() else { continue };
+    let Ok(bounds) = ch.loose_bounds() else {
+      continue;
+    };
     let rect = Rect::new(
       bounds.left().value,
       page_height - bounds.top().value,
@@ -121,7 +130,10 @@ fn extract_lines(text: &PdfPageText, page_height: f32) -> Vec<Line> {
 }
 
 fn is_invisible(c: char) -> bool {
-  matches!(c, '\u{200b}'..='\u{200d}' | '\u{2060}' | '\u{feff}' | '\u{fffe}' | '\u{ffff}')
+  matches!(
+    c,
+    '\u{200b}'..='\u{200d}' | '\u{2060}' | '\u{feff}' | '\u{fffe}' | '\u{ffff}'
+  )
 }
 
 /// Expande ligaduras tipográficas em letras comuns.
@@ -176,13 +188,21 @@ impl FontCache {
   }
 }
 
-fn style_from(name: &str, weight: u32, italic_flag: bool, fixed_pitch: bool, fake_bold: bool) -> Style {
+fn style_from(
+  name: &str,
+  weight: u32,
+  italic_flag: bool,
+  fixed_pitch: bool,
+  fake_bold: bool,
+) -> Style {
   // Remove o prefixo de subconjunto ("ABCDEF+Minion-Bold").
   let base = name.rsplit('+').next().unwrap_or(name).to_lowercase();
   let has = |words: &[&str]| words.iter().any(|w| base.contains(w));
   let bold = fake_bold
     || weight >= 600
-    || has(&["bold", "black", "heavy", "semibold", "demi", "extrab", "ultrab"])
+    || has(&[
+      "bold", "black", "heavy", "semibold", "demi", "extrab", "ultrab",
+    ])
     || base.ends_with("-bd")
     || base.ends_with("-b")
     || is_tex_bold(&base);
@@ -191,7 +211,15 @@ fn style_from(name: &str, weight: u32, italic_flag: bool, fixed_pitch: bool, fak
     || base.starts_with("cmti")
     || base.starts_with("cmsl");
   let mono = fixed_pitch
-    || has(&["mono", "courier", "consol", "menlo", "inconsolata", "typewriter", "code"])
+    || has(&[
+      "mono",
+      "courier",
+      "consol",
+      "menlo",
+      "inconsolata",
+      "typewriter",
+      "code",
+    ])
     || is_tex_mono(&base);
   Style { bold, italic, mono }
 }
@@ -202,7 +230,10 @@ fn is_tex_bold(name: &str) -> bool {
 }
 
 fn is_tex_mono(name: &str) -> bool {
-  name.starts_with("cmtt") || name.starts_with("sftt") || name.starts_with("lmmono") || name.contains("tt10")
+  name.starts_with("cmtt")
+    || name.starts_with("sftt")
+    || name.starts_with("lmmono")
+    || name.contains("tt10")
 }
 
 #[derive(Default)]
@@ -210,6 +241,9 @@ struct LineBuilder {
   lines: Vec<Line>,
   spans: Vec<Span>,
   pending_space: bool,
+  /// O PDFium indicou fim de linha; confirmado só se o próximo caractere estiver noutra linha
+  /// (ele também quebra antes de expoentes e índices).
+  pending_break: bool,
   last_x1: f32,
   /// Tamanho e linha de base de referência da linha atual (primeiro caractere de tamanho normal).
   line_size: f32,
@@ -217,6 +251,12 @@ struct LineBuilder {
 }
 
 impl LineBuilder {
+  fn line_break(&mut self) {
+    if !self.spans.is_empty() {
+      self.pending_break = true;
+    }
+  }
+
   fn space(&mut self) {
     if !self.spans.is_empty() {
       self.pending_space = true;
@@ -231,16 +271,21 @@ impl LineBuilder {
 
   fn push(&mut self, c: char, rect: Rect, size: f32, baseline: f32, style: Style) {
     if !self.spans.is_empty() {
-      let smaller = size < self.line_size * 0.85;
-      let raised_or_lowered = (baseline - self.line_baseline).abs() < self.line_size;
-      let same_line = (baseline - self.line_baseline).abs() <= self.line_size.max(size) * 0.6
-        || (smaller && raised_or_lowered);
+      let dy = (baseline - self.line_baseline).abs();
+      // Expoente ou índice: menor e deslocado verticalmente, mas na mesma linha.
+      let script = size < self.line_size * 0.85 && dy < self.line_size;
+      let same_line = if self.pending_break {
+        (script || dy < self.line_size * 0.3) && rect.x0 >= self.last_x1 - size * 0.5
+      } else {
+        script || dy <= self.line_size.max(size) * 0.6
+      };
       // Voltar muito para a esquerda é início de outra linha (ou coluna).
       let went_back = rect.x0 < self.last_x1 - size * 2.0;
       if !same_line || went_back {
         self.end_line();
       }
     }
+    self.pending_break = false;
     if self.spans.is_empty() {
       self.line_size = size;
       self.line_baseline = baseline;
@@ -285,13 +330,17 @@ impl LineBuilder {
 
   fn end_line(&mut self) {
     self.pending_space = false;
+    self.pending_break = false;
     self.last_x1 = 0.0;
     let mut spans = std::mem::take(&mut self.spans);
     spans.retain(|s| !s.text.trim().is_empty() || s.text.contains('\u{ad}'));
     if spans.is_empty() {
       return;
     }
-    let bbox = spans.iter().skip(1).fold(spans[0].bbox, |acc, s| acc.union(&s.bbox));
+    let bbox = spans
+      .iter()
+      .skip(1)
+      .fold(spans[0].bbox, |acc, s| acc.union(&s.bbox));
     let mut by_size: HashMap<u32, usize> = HashMap::new();
     for span in &spans {
       *by_size.entry((span.size * 2.0).round() as u32).or_default() += span.text.chars().count();
@@ -333,17 +382,19 @@ impl GraphicsCtx<'_, '_> {
   fn collect(&mut self, object: &PdfPageObject, out: &mut Vec<Graphic>, depth: usize) {
     match object {
       PdfPageObject::Path(path) => {
-        let Some(bbox) = self.rect(object) else { return };
-        let filled = path
-          .fill_mode()
-          .is_ok_and(|m| m != PdfPathFillMode::None);
+        let Some(bbox) = self.rect(object) else {
+          return;
+        };
+        let filled = path.fill_mode().is_ok_and(|m| m != PdfPathFillMode::None);
         out.push(Graphic {
           kind: GraphicKind::Path { filled },
           bbox,
         });
       }
       PdfPageObject::Image(image) => {
-        let Some(bbox) = self.rect(object) else { return };
+        let Some(bbox) = self.rect(object) else {
+          return;
+        };
         if let Some(asset) = self.save_image(image) {
           out.push(Graphic {
             kind: GraphicKind::Image { asset },
