@@ -1,6 +1,26 @@
 # Plano: fidelidade da conversão (próxima feature)
 
-> Registrado em 2026-10-21. Status: **planejado, não iniciado**.
+> Registrado em 2026-10-21. Status (2026-10-23): **F1–F6 implementadas** na branch `dev`;
+> F7 (OCR) e o PDFium estático pendentes.
+
+## Situação
+
+| Fase | Status | Commit |
+| --- | --- | --- |
+| F1 Motor pdfium | feito | `refactor(core): troca pdf-extract pelo pdfium na extração` |
+| F2 Qualidade do texto | feito | `feat(core): melhora a qualidade do texto` |
+| F3 Várias colunas | feito | `feat(core): lê páginas em várias colunas na ordem certa` |
+| F4 Negrito, itálico, código, notas | feito | `feat(core): preserva negrito, itálico, código e notas de rodapé` |
+| F5 Imagens e figuras vetoriais | feito | `feat(core): extrai imagens e figuras para src/images` |
+| F6 Tabelas | feito | `feat(core): converte tabelas em tabelas markdown` |
+| F7 OCR | pendente | — |
+
+Corpus de regressão (links em `corpus/`, fora do git): Tanenbaum, Kurose, How Linux Works,
+Competitive Programmer's Handbook, Édipo Rei, apostilas e slides. Todos geram o livro e o HTML
+do mdBook; o maior (778 páginas) leva ~7 s e ~280 MB de pico.
+
+Limitações conhecidas: tabelas sem nenhum filete continuam texto; diagramas de caixas alinhadas
+às vezes viram tabela; texto com espaçamento entre letras ("NOT E") vem assim do PDFium.
 
 ## Contexto
 
@@ -120,12 +140,15 @@ no texto corrido.
 - Requer Tesseract + idioma: `sudo dnf install tesseract-langpack-por`
   (hoje a máquina só tem `eng`).
 
-## Decisões em aberto (perguntar antes de iniciar)
+## Decisões
 
-1. pdfium **dinâmico ou estático**? (recomendação: dinâmico primeiro, estático depois)
+1. PDFium: o usuário escolheu **estático**. Não há `libpdfium.a` pré-compilada para Linux
+   (bblanchon e paulocoutinhox só publicam a `.so`); falta decidir entre compilar o PDFium do
+   código-fonte (depot_tools/gn, vários GB, ~1 h) ou embutir a `.so` no binário e extraí-la na
+   primeira execução. Até lá: `.so` em `vendor/` (feature `static` já existe no core).
 2. OCR com **Tesseract** (melhor para português, dependência de sistema) ou **`ocrs`**
-   (Rust puro, binário único, modelos focados em inglês)? Recomendação: Tesseract.
-3. Imagens: só raster, ou também renderizar figuras vetoriais?
+   (Rust puro, binário único, modelos focados em inglês)? Recomendação: Tesseract. Pendente.
+3. Imagens: raster **e** figuras vetoriais (feito).
 
 ## Verificação
 
