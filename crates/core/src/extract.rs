@@ -1,154 +1,408 @@
-//! Extração de texto do PDF, linha a linha, preservando tamanho de fonte e posição vertical.
+//! Extração com o PDFium: linhas de texto com estilo e posição, traços vetoriais e imagens.
 
 use std::collections::HashMap;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::path::Path;
 
-use pdf_extract::{Document, MediaBox, OutputDev, OutputError, Transform};
+use pdfium_render::prelude::*;
 
-/// Uma linha visual de texto.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Line {
-  pub text: String,
-  /// Tamanho de fonte dominante da linha (em pontos, arredondado a 0.5).
-  pub font_size: f32,
-  /// Posição vertical a partir do topo da página.
-  pub y: f32,
+use crate::model::{Graphic, GraphicKind, Line, Page, Rect, Span, Style};
+
+/// Imagem raster gravada no diretório temporário de recursos.
+#[derive(Debug, Clone)]
+pub struct ImageAsset {
+  pub file: String,
+  /// Páginas em que a imagem aparece (mesmos bytes = mesma imagem).
+  pub pages: Vec<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Page {
-  /// Número da página, começando em 1.
-  pub number: u32,
-  pub lines: Vec<Line>,
+pub struct Extracted {
+  pub pages: Vec<Page>,
+  pub assets: Vec<ImageAsset>,
+  /// Páginas que o PDFium não conseguiu ler.
+  pub failed: Vec<u32>,
 }
 
-/// Extrai todas as páginas. Páginas que o parser não consegue ler viram páginas vazias
-/// e são reportadas em `failed`.
-pub fn extract_pages(doc: &Document, mut on_page: impl FnMut(u32, u32)) -> (Vec<Page>, Vec<u32>) {
-  let numbers: Vec<u32> = doc.get_pages().keys().copied().collect();
-  let total = numbers.len() as u32;
-  let mut pages = Vec::with_capacity(numbers.len());
-  let mut failed = Vec::new();
+/// Imagens menores que isso (em pixels) são ícones ou ruído.
+const MIN_IMAGE_PX: i32 = 16;
+/// Profundidade máxima de XObjects aninhados.
+const MAX_FORM_DEPTH: usize = 8;
 
-  for (i, &number) in numbers.iter().enumerate() {
-    let mut collector = LineCollector::default();
-    // pdf-extract ainda tem `unwrap`s internos; uma página malformada não deve derrubar o livro.
-    let result = catch_unwind(AssertUnwindSafe(|| {
-      pdf_extract::output_doc_page(doc, &mut collector, number)
-    }));
-    match result {
-      Ok(Ok(())) => {}
-      _ => failed.push(number),
-    }
-    collector.flush();
-    pages.push(Page {
+pub fn extract(document: &PdfDocument, assets_dir: &Path, mut on_page: impl FnMut(u32, u32)) -> Extracted {
+  let total = document.pages().len() as u32;
+  let mut out = Extracted {
+    pages: Vec::with_capacity(total as usize),
+    assets: Vec::new(),
+    failed: Vec::new(),
+  };
+  let mut by_hash: HashMap<u64, usize> = HashMap::new();
+
+  for (index, page) in document.pages().iter().enumerate() {
+    let number = index as u32 + 1;
+    let width = page.width().value;
+    let height = page.height().value;
+    let lines = match page.text() {
+      Ok(text) => extract_lines(&text, height),
+      Err(_) => {
+        out.failed.push(number);
+        Vec::new()
+      }
+    };
+    let mut graphics = Vec::new();
+    let mut ctx = GraphicsCtx {
+      document,
+      height,
       number,
-      lines: collector.lines,
+      assets_dir,
+      assets: &mut out.assets,
+      by_hash: &mut by_hash,
+    };
+    for object in page.objects().iter() {
+      ctx.collect(&object, &mut graphics, 0);
+    }
+    out.pages.push(Page {
+      number,
+      width,
+      height,
+      lines,
+      graphics,
     });
-    on_page(i as u32 + 1, total);
+    on_page(number, total);
   }
-  (pages, failed)
+  out
+}
+
+fn extract_lines(text: &PdfPageText, page_height: f32) -> Vec<Line> {
+  let mut builder = LineBuilder::default();
+  let mut fonts = FontCache::default();
+  for ch in text.chars().iter() {
+    let Some(c) = ch.unicode_char() else { continue };
+    match c {
+      '\n' | '\r' => {
+        builder.end_line();
+        continue;
+      }
+      // O PDFium usa 0x02 para hífen de fim de linha.
+      '\u{2}' => {
+        builder.soft_hyphen();
+        continue;
+      }
+      c if c.is_whitespace() => {
+        builder.space();
+        continue;
+      }
+      c if c.is_control() || is_invisible(c) => continue,
+      _ => {}
+    }
+    // Texto girado (marcas d'água, legendas verticais) não faz parte do fluxo.
+    if ch.angle_degrees().is_ok_and(|a| a.abs() > 1.0 && (a - 360.0).abs() > 1.0) {
+      continue;
+    }
+    let Ok(bounds) = ch.loose_bounds() else { continue };
+    let rect = Rect::new(
+      bounds.left().value,
+      page_height - bounds.top().value,
+      bounds.right().value,
+      page_height - bounds.bottom().value,
+    );
+    let mut size = ch.scaled_font_size().value;
+    if size <= 0.0 {
+      size = rect.height();
+    }
+    let baseline = ch
+      .origin_y()
+      .map(|y| page_height - y.value)
+      .unwrap_or(rect.y1);
+    let style = fonts.style(&ch);
+    builder.push(c, rect, size, baseline, style);
+  }
+  builder.end_line();
+  builder.lines
+}
+
+fn is_invisible(c: char) -> bool {
+  matches!(c, '\u{200b}'..='\u{200d}' | '\u{2060}' | '\u{feff}' | '\u{fffe}' | '\u{ffff}')
+}
+
+/// Expande ligaduras tipográficas em letras comuns.
+fn expand_ligature(c: char) -> Option<&'static str> {
+  Some(match c {
+    'ﬀ' => "ff",
+    'ﬁ' => "fi",
+    'ﬂ' => "fl",
+    'ﬃ' => "ffi",
+    'ﬄ' => "ffl",
+    'ﬅ' | 'ﬆ' => "st",
+    '\u{2010}' | '\u{2011}' => "-",
+    _ => return None,
+  })
+}
+
+/// Estilo por fonte, para não refazer a análise do nome a cada caractere.
+#[derive(Default)]
+struct FontCache {
+  styles: HashMap<(String, u32, bool, bool, bool), Style>,
+}
+
+impl FontCache {
+  fn style(&mut self, ch: &PdfPageTextChar) -> Style {
+    let weight = match ch.font_weight() {
+      Some(PdfFontWeight::Weight100) => 100,
+      Some(PdfFontWeight::Weight200) => 200,
+      Some(PdfFontWeight::Weight300) => 300,
+      Some(PdfFontWeight::Weight400Normal) => 400,
+      Some(PdfFontWeight::Weight500) => 500,
+      Some(PdfFontWeight::Weight600) => 600,
+      Some(PdfFontWeight::Weight700Bold) => 700,
+      Some(PdfFontWeight::Weight800) => 800,
+      Some(PdfFontWeight::Weight900) => 900,
+      Some(PdfFontWeight::Custom(w)) => w,
+      None => 0,
+    };
+    // O nome distingue fontes com os mesmos atributos (ex.: Times vs Times-Bold sem peso).
+    let key = (
+      ch.font_name(),
+      weight,
+      ch.font_is_italic(),
+      ch.font_is_fixed_pitch(),
+      ch.font_is_bold_reenforced(),
+    );
+    if let Some(style) = self.styles.get(&key) {
+      return *style;
+    }
+    let style = style_from(&key.0, key.1, key.2, key.3, key.4);
+    self.styles.insert(key, style);
+    style
+  }
+}
+
+fn style_from(name: &str, weight: u32, italic_flag: bool, fixed_pitch: bool, fake_bold: bool) -> Style {
+  // Remove o prefixo de subconjunto ("ABCDEF+Minion-Bold").
+  let base = name.rsplit('+').next().unwrap_or(name).to_lowercase();
+  let has = |words: &[&str]| words.iter().any(|w| base.contains(w));
+  let bold = fake_bold
+    || weight >= 600
+    || has(&["bold", "black", "heavy", "semibold", "demi", "extrab", "ultrab"])
+    || base.ends_with("-bd")
+    || base.ends_with("-b")
+    || is_tex_bold(&base);
+  let italic = italic_flag
+    || has(&["italic", "oblique", "-it", "ital", "slant"])
+    || base.starts_with("cmti")
+    || base.starts_with("cmsl");
+  let mono = fixed_pitch
+    || has(&["mono", "courier", "consol", "menlo", "inconsolata", "typewriter", "code"])
+    || is_tex_mono(&base);
+  Style { bold, italic, mono }
+}
+
+/// Fontes Computer Modern / Latin Modern: cmbx10, lmroman10-bold, sfbx...
+fn is_tex_bold(name: &str) -> bool {
+  name.starts_with("cmbx") || name.starts_with("cmb10") || name.starts_with("sfbx")
+}
+
+fn is_tex_mono(name: &str) -> bool {
+  name.starts_with("cmtt") || name.starts_with("sftt") || name.starts_with("lmmono") || name.contains("tt10")
 }
 
 #[derive(Default)]
-struct LineCollector {
-  page_height: f64,
+struct LineBuilder {
   lines: Vec<Line>,
-  text: String,
-  /// Contagem de caracteres por tamanho de fonte (chave = tamanho * 2).
-  sizes: HashMap<u32, usize>,
-  y: f64,
-  last_end: f64,
-  has_line: bool,
+  spans: Vec<Span>,
+  pending_space: bool,
+  last_x1: f32,
+  /// Tamanho e linha de base de referência da linha atual (primeiro caractere de tamanho normal).
+  line_size: f32,
+  line_baseline: f32,
 }
 
-impl LineCollector {
-  fn flush(&mut self) {
-    let text = self.text.trim();
-    if !text.is_empty() {
-      let size = self
-        .sizes
-        .iter()
-        .max_by_key(|&(size, count)| (*count, *size))
-        .map(|(size, _)| *size as f32 / 2.0)
-        .unwrap_or(0.0);
-      self.lines.push(Line {
-        text: collapse_spaces(text),
-        font_size: size,
-        y: self.y as f32,
-      });
+impl LineBuilder {
+  fn space(&mut self) {
+    if !self.spans.is_empty() {
+      self.pending_space = true;
     }
-    self.text.clear();
-    self.sizes.clear();
-    self.has_line = false;
-  }
-}
-
-impl OutputDev for LineCollector {
-  fn begin_page(
-    &mut self,
-    _page_num: u32,
-    media_box: &MediaBox,
-    _art_box: Option<(f64, f64, f64, f64)>,
-  ) -> Result<(), OutputError> {
-    self.page_height = media_box.ury - media_box.lly;
-    Ok(())
   }
 
-  fn end_page(&mut self) -> Result<(), OutputError> {
-    self.flush();
-    Ok(())
+  fn soft_hyphen(&mut self) {
+    if let Some(span) = self.spans.last_mut() {
+      span.text.push('\u{ad}');
+    }
   }
 
-  fn output_character(
-    &mut self,
-    trm: &Transform,
-    width: f64,
-    _spacing: f64,
-    font_size: f64,
-    char: &str,
-  ) -> Result<(), OutputError> {
-    // Mesmo cálculo do PlainTextOutput do pdf-extract: tamanho efetivo após a matriz de texto.
-    let sx = font_size * trm.m11 + font_size * trm.m21;
-    let sy = font_size * trm.m12 + font_size * trm.m22;
-    let size = (sx * sy).abs().sqrt();
-    let x = trm.m31;
-    let y = self.page_height - trm.m32;
-
-    if self.has_line {
-      let new_line = (y - self.y).abs() > size * 0.5;
-      if new_line {
-        self.flush();
-      } else if x > self.last_end + size * 0.1 && !self.text.ends_with(' ') {
-        self.text.push(' ');
+  fn push(&mut self, c: char, rect: Rect, size: f32, baseline: f32, style: Style) {
+    if !self.spans.is_empty() {
+      let smaller = size < self.line_size * 0.85;
+      let raised_or_lowered = (baseline - self.line_baseline).abs() < self.line_size;
+      let same_line = (baseline - self.line_baseline).abs() <= self.line_size.max(size) * 0.6
+        || (smaller && raised_or_lowered);
+      // Voltar muito para a esquerda é início de outra linha (ou coluna).
+      let went_back = rect.x0 < self.last_x1 - size * 2.0;
+      if !same_line || went_back {
+        self.end_line();
       }
     }
-    if !self.has_line {
-      self.y = y;
-      self.has_line = true;
+    if self.spans.is_empty() {
+      self.line_size = size;
+      self.line_baseline = baseline;
+    } else if size > self.line_size * 1.15 && (baseline - self.line_baseline).abs() < size * 0.3 {
+      // Uma capitular ou palavra maior na mesma linha passa a ser a referência.
+      self.line_size = size;
+      self.line_baseline = baseline;
     }
 
-    self.text.push_str(char);
-    if !char.trim().is_empty() {
-      *self.sizes.entry((size * 2.0).round() as u32).or_default() += char.chars().count();
+    let gap = rect.x0 - self.last_x1;
+    let space_before = self.pending_space || (!self.spans.is_empty() && gap > size * 0.5);
+    let new_span = match self.spans.last() {
+      None => true,
+      Some(span) => {
+        span.style != style
+          || (span.size - size).abs() > span.size * 0.1
+          || (span.baseline - baseline).abs() > size * 0.15
+          || gap > size * 1.2
+      }
+    };
+    if new_span {
+      self.spans.push(Span {
+        text: String::new(),
+        bbox: rect,
+        size,
+        baseline,
+        style,
+        space_before,
+      });
+    } else if space_before {
+      self.spans.last_mut().unwrap().text.push(' ');
     }
-    self.last_end = x + width * size;
-    Ok(())
+    let span = self.spans.last_mut().unwrap();
+    match expand_ligature(c) {
+      Some(s) => span.text.push_str(s),
+      None => span.text.push(c),
+    }
+    span.bbox = span.bbox.union(&rect);
+    self.pending_space = false;
+    self.last_x1 = rect.x1;
   }
 
-  fn begin_word(&mut self) -> Result<(), OutputError> {
-    Ok(())
-  }
-
-  fn end_word(&mut self) -> Result<(), OutputError> {
-    Ok(())
-  }
-
-  fn end_line(&mut self) -> Result<(), OutputError> {
-    Ok(())
+  fn end_line(&mut self) {
+    self.pending_space = false;
+    self.last_x1 = 0.0;
+    let mut spans = std::mem::take(&mut self.spans);
+    spans.retain(|s| !s.text.trim().is_empty() || s.text.contains('\u{ad}'));
+    if spans.is_empty() {
+      return;
+    }
+    let bbox = spans.iter().skip(1).fold(spans[0].bbox, |acc, s| acc.union(&s.bbox));
+    let mut by_size: HashMap<u32, usize> = HashMap::new();
+    for span in &spans {
+      *by_size.entry((span.size * 2.0).round() as u32).or_default() += span.text.chars().count();
+    }
+    let size = by_size
+      .into_iter()
+      .max_by_key(|&(size, count)| (count, size))
+      .map(|(size, _)| size as f32 / 2.0)
+      .unwrap_or(self.line_size);
+    self.lines.push(Line {
+      spans,
+      bbox,
+      size,
+      baseline: self.line_baseline,
+    });
   }
 }
 
-fn collapse_spaces(s: &str) -> String {
-  s.split_whitespace().collect::<Vec<_>>().join(" ")
+struct GraphicsCtx<'a, 'd> {
+  document: &'a PdfDocument<'d>,
+  height: f32,
+  number: u32,
+  assets_dir: &'a Path,
+  assets: &'a mut Vec<ImageAsset>,
+  by_hash: &'a mut HashMap<u64, usize>,
+}
+
+impl GraphicsCtx<'_, '_> {
+  fn rect(&self, object: &PdfPageObject) -> Option<Rect> {
+    let b = object.bounds().ok()?;
+    Some(Rect::new(
+      b.left().value,
+      self.height - b.top().value,
+      b.right().value,
+      self.height - b.bottom().value,
+    ))
+  }
+
+  fn collect(&mut self, object: &PdfPageObject, out: &mut Vec<Graphic>, depth: usize) {
+    match object {
+      PdfPageObject::Path(path) => {
+        let Some(bbox) = self.rect(object) else { return };
+        let filled = path
+          .fill_mode()
+          .is_ok_and(|m| m != PdfPathFillMode::None);
+        out.push(Graphic {
+          kind: GraphicKind::Path { filled },
+          bbox,
+        });
+      }
+      PdfPageObject::Image(image) => {
+        let Some(bbox) = self.rect(object) else { return };
+        if let Some(asset) = self.save_image(image) {
+          out.push(Graphic {
+            kind: GraphicKind::Image { asset },
+            bbox,
+          });
+        }
+      }
+      PdfPageObject::XObjectForm(form) if depth < MAX_FORM_DEPTH => {
+        for child in form.iter() {
+          self.collect(&child, out, depth + 1);
+        }
+      }
+      _ => {}
+    }
+  }
+
+  /// Grava a imagem uma única vez por conteúdo; JPEG é copiado sem recodificar.
+  fn save_image(&mut self, image: &PdfPageImageObject) -> Option<usize> {
+    let (w, h) = (image.width().ok()?, image.height().ok()?);
+    if w < MIN_IMAGE_PX || h < MIN_IMAGE_PX {
+      return None;
+    }
+    let raw = image.get_raw_image_data().ok()?;
+    let mut hasher = DefaultHasher::new();
+    raw.hash(&mut hasher);
+    (w, h).hash(&mut hasher);
+    let hash = hasher.finish();
+
+    if let Some(&id) = self.by_hash.get(&hash) {
+      let pages = &mut self.assets[id].pages;
+      if pages.last() != Some(&self.number) {
+        pages.push(self.number);
+      }
+      return Some(id);
+    }
+
+    let filters = image.filters();
+    let only_dct = filters.len() == 1
+      && filters
+        .get(0)
+        .is_ok_and(|f| f.name() == "DCTDecode" || f.name() == "DCT");
+    let id = self.assets.len();
+    let file = if only_dct {
+      let file = format!("img-{id:04}.jpg");
+      std::fs::write(self.assets_dir.join(&file), &raw).ok()?;
+      file
+    } else {
+      let file = format!("img-{id:04}.png");
+      let decoded = image.get_processed_image(self.document).ok()?;
+      decoded
+        .save_with_format(self.assets_dir.join(&file), image::ImageFormat::Png)
+        .ok()?;
+      file
+    };
+    self.by_hash.insert(hash, id);
+    self.assets.push(ImageAsset {
+      file,
+      pages: vec![self.number],
+    });
+    Some(id)
+  }
 }

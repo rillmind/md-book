@@ -6,5 +6,11 @@ license.workspace = true
 
 [dependencies]
 deunicode = "1.6.2"
-pdf-extract = "0.12.1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+pdfium-render = "0.9.4"
+tempfile = "3.27.0"
 thiserror = "2.0.21"
+
+[features]
+# Linka o PDFium estaticamente (requer PDFIUM_STATIC_LIB_PATH com libpdfium.a).
+static = ["pdfium-render/static"]

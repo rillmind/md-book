@@ -1,6 +1,6 @@
 //! Metadados do PDF: outline (bookmarks) e título.
 
-use pdf_extract::{Document, Object};
+use pdfium_render::prelude::*;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutlineEntry {
@@ -12,53 +12,57 @@ pub struct OutlineEntry {
 }
 
 /// Bookmarks do PDF em ordem de leitura. Vazio se o PDF não tiver outline.
-pub fn read_outline(doc: &Document) -> Vec<OutlineEntry> {
-  let Ok(toc) = doc.get_toc() else {
-    return Vec::new();
-  };
-  let mut entries: Vec<OutlineEntry> = toc
-    .toc
-    .into_iter()
-    .filter(|e| !e.title.trim().is_empty())
-    .map(|e| OutlineEntry {
-      level: e.level.clamp(1, 6) as u8,
-      title: e.title.split_whitespace().collect::<Vec<_>>().join(" "),
-      page: e.page as u32,
-    })
-    .collect();
-  // O get_toc preserva a ordem da árvore; garantimos ordem por página sem quebrar empates.
+pub fn read_outline(document: &PdfDocument) -> Vec<OutlineEntry> {
+  let mut entries = Vec::new();
+  let mut node = document.bookmarks().root();
+  while let Some(bookmark) = node {
+    node = bookmark.next_sibling();
+    walk(&bookmark, 1, &mut entries);
+  }
+  // A árvore já está em ordem de leitura; garantimos ordem por página sem quebrar empates.
   entries.sort_by_key(|e| e.page);
   entries
 }
 
-/// Valor de `/Title` no dicionário `/Info`, se existir e não for vazio.
-pub fn read_title(doc: &Document) -> Option<String> {
-  let info = doc.trailer.get(b"Info").ok()?;
-  let info = match info {
-    Object::Reference(id) => doc.get_object(*id).ok()?,
-    other => other,
-  };
-  let title = info.as_dict().ok()?.get(b"Title").ok()?;
-  let bytes = match title {
-    Object::String(bytes, _) => bytes,
-    _ => return None,
-  };
-  let title = decode_pdf_string(bytes);
-  let title = title.trim();
-  (!title.is_empty()).then(|| title.to_string())
+fn walk(bookmark: &PdfBookmark, level: u8, out: &mut Vec<OutlineEntry>) {
+  let title = bookmark
+    .title()
+    .unwrap_or_default()
+    .split_whitespace()
+    .collect::<Vec<_>>()
+    .join(" ");
+  if let Some(page) = destination_page(bookmark)
+    && !title.is_empty()
+  {
+    out.push(OutlineEntry {
+      level: level.min(6),
+      title,
+      page,
+    });
+  }
+  let mut child = bookmark.first_child();
+  while let Some(c) = child {
+    child = c.next_sibling();
+    walk(&c, level.saturating_add(1), out);
+  }
 }
 
-fn decode_pdf_string(bytes: &[u8]) -> String {
-  if let [0xfe, 0xff, rest @ ..] = bytes {
-    let units: Vec<u16> = rest
-      .chunks_exact(2)
-      .map(|c| u16::from_be_bytes([c[0], c[1]]))
-      .collect();
-    String::from_utf16_lossy(&units)
-  } else if let Ok(s) = std::str::from_utf8(bytes) {
-    s.to_string()
-  } else {
-    // PDFDocEncoding coincide com Latin-1 nos caracteres que importam aqui.
-    bytes.iter().map(|&b| b as char).collect()
-  }
+fn destination_page(bookmark: &PdfBookmark) -> Option<u32> {
+  let index = match bookmark.destination() {
+    Some(dest) => dest.page_index().ok()?,
+    None => match bookmark.action()? {
+      PdfAction::LocalDestination(action) => action.destination().ok()?.page_index().ok()?,
+      _ => return None,
+    },
+  };
+  u32::try_from(index).ok().map(|i| i + 1)
+}
+
+/// Título dos metadados do PDF, se existir e não for vazio.
+pub fn read_title(document: &PdfDocument) -> Option<String> {
+  let tag = document
+    .metadata()
+    .get(PdfDocumentMetadataTagType::Title)?;
+  let title = tag.value().trim();
+  (!title.is_empty()).then(|| title.to_string())
 }

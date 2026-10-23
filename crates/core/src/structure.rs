@@ -2,7 +2,43 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::extract::{Line, Page};
+use crate::model;
+
+/// Linha simplificada usada pela detecção de estrutura.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Line {
+  pub text: String,
+  /// Tamanho de fonte dominante (em pontos, arredondado a 0.5).
+  pub font_size: f32,
+  /// Linha de base a partir do topo da página.
+  pub y: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Page {
+  pub number: u32,
+  pub lines: Vec<Line>,
+}
+
+/// Converte as páginas extraídas para linhas de texto simples.
+pub fn text_pages(pages: &[model::Page]) -> Vec<Page> {
+  pages
+    .iter()
+    .map(|page| Page {
+      number: page.number,
+      lines: page
+        .lines
+        .iter()
+        .map(|line| Line {
+          text: line.text(),
+          font_size: (line.size * 2.0).round() / 2.0,
+          y: line.baseline,
+        })
+        .filter(|line| !line.text.is_empty())
+        .collect(),
+    })
+    .collect()
+}
 use crate::outline::OutlineEntry;
 
 #[derive(Debug, Clone, PartialEq)]

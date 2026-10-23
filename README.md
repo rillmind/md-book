@@ -7,7 +7,7 @@ linha de comando; TUI e GUI estão previstas.
 ## Ferramentas
 
 - [Rust](https://www.rust-lang.org/) (edition 2024) e Cargo
-- [pdf-extract](https://crates.io/crates/pdf-extract) / [lopdf](https://crates.io/crates/lopdf): leitura do PDF
+- [PDFium](https://pdfium.googlesource.com/pdfium/) (motor de PDF do Chromium) via [pdfium-render](https://crates.io/crates/pdfium-render): leitura do PDF
 - [clap](https://crates.io/crates/clap) e [indicatif](https://crates.io/crates/indicatif): linha de comando e progresso
 - [mdbook-driver](https://crates.io/crates/mdbook-driver): geração do HTML (opcional)
 
@@ -16,11 +16,15 @@ linha de comando; TUI e GUI estão previstas.
 Requer o Rust instalado ([rustup](https://rustup.rs/)).
 
 ```sh
-git clone <url-do-repositório>
-cd mdbook-generator
+git clone https://github.com/rillmind/md-book
+cd md-book
+./scripts/baixar-pdfium.sh                         # baixa a libpdfium para vendor/pdfium
 cargo install --path crates/cli                    # instala o binário md-book
 cargo install --path crates/cli --features build   # idem, com suporte a --build (HTML)
 ```
+
+O `md-book` procura a `libpdfium` na variável `MD_BOOK_PDFIUM`, ao lado do executável e em
+`vendor/pdfium/lib` do repositório.
 
 ## Uso
 

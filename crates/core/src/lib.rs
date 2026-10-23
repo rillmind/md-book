@@ -6,21 +6,29 @@
 mod book;
 mod extract;
 mod markdown;
+#[allow(dead_code)] // partes do modelo usadas pelas próximas etapas do pipeline
+mod model;
 mod outline;
+mod pdfium;
 mod structure;
 
 use std::path::{Path, PathBuf};
 
 pub use book::{WrittenBook, write_book};
 pub use markdown::render_chapter;
+pub use pdfium::PDFIUM_ENV;
 pub use structure::{Block, Chapter, FRONT_MATTER_TITLE, HeadingSource};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
   #[error("não foi possível abrir o PDF: {0}")]
-  Pdf(#[from] pdf_extract::Error),
-  #[error("o PDF está criptografado; descriptografe-o antes de converter")]
+  Pdf(String),
+  #[error("o PDF está protegido por senha")]
   Encrypted,
+  #[error(
+    "biblioteca PDFium não encontrada ({0}); rode scripts/baixar-pdfium.sh ou defina MD_BOOK_PDFIUM"
+  )]
+  PdfiumMissing(String),
   #[error("nenhum texto encontrado no PDF; se ele for escaneado (imagens), passe por um OCR antes")]
   NoText,
   #[error("o diretório de saída {0} não está vazio (use --force para sobrescrever)")]
@@ -83,13 +91,22 @@ pub fn analyze(
   options: &Options,
   mut progress: impl FnMut(Progress),
 ) -> Result<Book, Error> {
-  let doc = pdf_extract::Document::load(input)?;
-  if doc.is_encrypted() {
-    return Err(Error::Encrypted);
-  }
+  let document = pdfium::pdfium()?
+    .load_pdf_from_file(input, None)
+    .map_err(|e| match e {
+      pdfium_render::prelude::PdfiumError::PdfiumLibraryInternalError(
+        pdfium_render::prelude::PdfiumInternalError::PasswordError,
+      ) => Error::Encrypted,
+      e => Error::Pdf(e.to_string()),
+    })?;
+  let assets = tempfile::Builder::new().prefix("md-book-").tempdir()?;
 
-  let (mut pages, failed_pages) =
-    extract::extract_pages(&doc, |done, total| progress(Progress::Page { done, total }));
+  let extracted = extract::extract(&document, assets.path(), |done, total| {
+    progress(Progress::Page { done, total })
+  });
+  let failed_pages = extracted.failed;
+  let mut pages = structure::text_pages(&extracted.pages);
+  drop(extracted.pages);
   if pages.iter().all(|p| p.lines.is_empty()) {
     return Err(Error::NoText);
   }
@@ -97,7 +114,7 @@ pub fn analyze(
   progress(Progress::Structuring);
   structure::remove_page_furniture(&mut pages);
   let outline = if options.use_outline {
-    outline::read_outline(&doc)
+    outline::read_outline(&document)
   } else {
     Vec::new()
   };
@@ -107,7 +124,7 @@ pub fn analyze(
   let title = options
     .title
     .clone()
-    .or_else(|| outline::read_title(&doc))
+    .or_else(|| outline::read_title(&document))
     .unwrap_or_else(|| file_stem(input));
 
   let mut chapters = structure::split_chapters(structured.blocks, options.split_level.max(1));
