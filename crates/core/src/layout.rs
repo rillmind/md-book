@@ -6,11 +6,13 @@
 
 use crate::figures::Figure;
 use crate::model::{Line, Page};
+use crate::tables::Table;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Element {
   Line(Line),
   Figure(Figure),
+  Table(Table),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -42,14 +44,16 @@ impl Element {
     match self {
       Element::Line(line) => line.bbox,
       Element::Figure(figure) => figure.bbox,
+      Element::Table(table) => table.bbox,
     }
   }
 }
 
-/// Põe linhas e figuras em ordem de leitura.
-pub fn arrange(page: Page, figures: Vec<Figure>) -> PageContent {
+/// Põe linhas, figuras e tabelas em ordem de leitura.
+pub fn arrange(page: Page, figures: Vec<Figure>, tables: Vec<Table>) -> PageContent {
   let mut elements: Vec<Element> = page.lines.into_iter().map(Element::Line).collect();
   elements.extend(figures.into_iter().map(Element::Figure));
+  elements.extend(tables.into_iter().map(Element::Table));
   PageContent {
     number: page.number,
     width: page.width,
@@ -268,6 +272,7 @@ mod tests {
       .map(|e| match e {
         Element::Line(l) => l.text(),
         Element::Figure(f) => f.file.clone(),
+        Element::Table(_) => "tabela".into(),
       })
       .collect();
     assert_eq!(
@@ -332,6 +337,7 @@ mod tests {
       .map(|e| match e {
         Element::Line(l) => l.text(),
         Element::Figure(f) => f.file.clone(),
+        Element::Table(_) => "tabela".into(),
       })
       .collect();
     assert_eq!(&ordered[4..7], ["E4", "D0", "D1"]);
@@ -355,7 +361,7 @@ mod tests {
       file: "f.png".into(),
       alt: String::new(),
     };
-    let content = arrange(page, vec![figure]);
+    let content = arrange(page, vec![figure], Vec::new());
     assert!(matches!(content.elements[1], Element::Figure(_)));
   }
 }

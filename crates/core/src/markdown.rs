@@ -29,6 +29,7 @@ pub fn render_chapter(chapter: &Chapter) -> String {
         out.push_str(&format!("{fence}\n{code}\n{fence}\n\n"));
       }
       Block::Footnote { id, content } => notes.push((id, content)),
+      Block::Table(rows) => out.push_str(&render_table(rows)),
       Block::Image { file, alt } => {
         out.push_str(&format!(
           "![{}]({IMAGES_DIR}/{file})\n\n",
@@ -73,6 +74,31 @@ pub fn render_chapter(chapter: &Chapter) -> String {
   }
   let trimmed = out.trim_end().len();
   out.truncate(trimmed);
+  out.push('\n');
+  out
+}
+
+/// Tabela no formato do GitHub (suportado pelo mdBook); a primeira linha é o cabeçalho.
+fn render_table(rows: &[Vec<Vec<Inline>>]) -> String {
+  let cell = |c: &Vec<Inline>| {
+    let text = render_inlines(c).replace('|', "\\|");
+    if text.is_empty() {
+      " ".to_string()
+    } else {
+      text
+    }
+  };
+  let row = |r: &Vec<Vec<Inline>>| {
+    format!(
+      "| {} |\n",
+      r.iter().map(cell).collect::<Vec<_>>().join(" | ")
+    )
+  };
+  let mut out = row(&rows[0]);
+  out.push_str(&format!("|{}\n", " --- |".repeat(rows[0].len())));
+  for r in &rows[1..] {
+    out.push_str(&row(r));
+  }
   out.push('\n');
   out
 }
@@ -390,6 +416,18 @@ mod tests {
     assert_eq!(
       render_chapter(&c),
       "# Capítulo 1\n\nO(n<sup>2</sup>) e H<sub>2</sub>O, ver nota[^3-1].\n\n```\nfn main() {\n    let x = 1;\n}\n```\n\n[^3-1]: A nota.\n"
+    );
+  }
+
+  #[test]
+  fn renders_gfm_tables() {
+    let c = chapter(vec![Block::Table(vec![
+      vec![vec![Inline::plain("Op")], vec![Inline::plain("Uso")]],
+      vec![vec![Inline::plain("|")], vec![]],
+    ])]);
+    assert_eq!(
+      render_chapter(&c),
+      "# Capítulo 1\n\n| Op | Uso |\n| --- | --- |\n| \\| |   |\n"
     );
   }
 

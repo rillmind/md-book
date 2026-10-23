@@ -141,3 +141,39 @@ fn extracts_photo_and_vector_figure_with_captions() {
   );
   std::fs::remove_dir_all(&out).unwrap();
 }
+
+#[test]
+fn converts_bordered_table() {
+  let book = convert("tabela.pdf");
+  let rows = book
+    .chapters
+    .iter()
+    .flat_map(|c| &c.blocks)
+    .find_map(|b| match b {
+      Block::Table(rows) => Some(rows),
+      _ => None,
+    })
+    .expect("tabela");
+  let text = |cell: &Vec<mdbook_gen_core::Inline>| -> String {
+    cell
+      .iter()
+      .map(|i| match i {
+        mdbook_gen_core::Inline::Text { text, .. } => text.clone(),
+        _ => String::new(),
+      })
+      .collect()
+  };
+  let cells: Vec<Vec<String>> = rows.iter().map(|r| r.iter().map(text).collect()).collect();
+  assert_eq!(
+    cells,
+    [
+      ["Comando", "Função"],
+      ["ls", "Lista arquivos"],
+      [
+        "cp",
+        "Copia arquivos e diretórios entre dois lugares quaisquer do sistema"
+      ],
+      ["rm", "Remove arquivos"],
+    ]
+  );
+}

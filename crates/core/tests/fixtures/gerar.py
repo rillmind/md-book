@@ -83,3 +83,16 @@ open("figuras.html", "w").write("\n".join(html))
 lo("--infilter=HTML (StarWriter)", "--convert-to", "odt", "figuras.html")
 lo("--convert-to", "pdf", "figuras.odt")
 subprocess.run(["rm", "figuras.html", "figuras.odt", "foto.png", "diagrama.svg"], check=True)
+
+
+# Tabela com bordas, cabeçalho e uma célula que quebra em duas linhas.
+rows = [("Comando", "Função"), ("ls", "Lista arquivos"), ("cp", "Copia arquivos e diretórios entre dois lugares quaisquer do sistema"),
+        ("rm", "Remove arquivos")]
+cells = "".join(f"<tr>{''.join(f'<{t}>{c}</{t}>' for c in r)}</tr>" for r, t in zip(rows, ["th", "td", "td", "td"]))
+html = ['<html><head><meta charset="utf-8"><title>Tabelas</title></head><body>', "<h1>1 Tabelas</h1>", para(3),
+        "<p>Tabela 1.1 Comandos básicos.</p>", f'<table border="1" cellpadding="4" width="60%">{cells}</table>', para(3),
+        "</body></html>"]
+open("tabela.html", "w").write("\n".join(html))
+lo("--infilter=HTML (StarWriter)", "--convert-to", "odt", "tabela.html")
+lo("--convert-to", "pdf", "tabela.odt")
+subprocess.run(["rm", "tabela.html", "tabela.odt"], check=True)

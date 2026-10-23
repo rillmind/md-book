@@ -147,17 +147,15 @@ fn is_heading(line: &Line, body: f32) -> bool {
   body > 0.0 && line.size >= body * HEADING_RATIO
 }
 
-/// Elementos que não fazem parte de figuras: imagens e traços decorativos, regiões já usadas
-/// (tabelas).
+/// Elementos decorativos que não fazem parte de figuras.
 #[derive(Default)]
 pub struct Ignore {
   pub images: HashSet<usize>,
   pub paths: HashSet<[i32; 4]>,
-  pub regions: Vec<Rect>,
 }
 
-/// Candidatas a figura da página (sem gravar nada).
-pub fn detect(page: &Page, ignore: &Ignore, body: f32) -> Vec<Candidate> {
+/// Candidatas a figura da página (sem gravar nada). `taken` são regiões já usadas (tabelas).
+pub fn detect(page: &Page, ignore: &Ignore, taken: &[Rect], body: f32) -> Vec<Candidate> {
   let page_rect = Rect::new(0.0, 0.0, page.width, page.height);
   let page_area = page_rect.area();
   let few_lines = page.lines.len() < 3;
@@ -166,11 +164,7 @@ pub fn detect(page: &Page, ignore: &Ignore, body: f32) -> Vec<Candidate> {
   let mut items: Vec<(Rect, Option<usize>)> = Vec::new();
   for graphic in &page.graphics {
     let bbox = graphic.bbox;
-    if ignore
-      .regions
-      .iter()
-      .any(|r| r.contains_point(bbox.center()))
-    {
+    if taken.iter().any(|r| r.contains_point(bbox.center())) {
       continue;
     }
     match graphic.kind {
@@ -451,7 +445,7 @@ mod tests {
         path(300.0, 200.0, 400.0, 240.0),
       ],
     );
-    let found = detect(&p, &Ignore::default(), 10.0);
+    let found = detect(&p, &Ignore::default(), &[], 10.0);
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].bbox.x0, 100.0);
     assert!(found[0].raster.is_none());
@@ -480,7 +474,7 @@ mod tests {
         path(100.0, 400.0, 500.0, 500.0), // fundo do quadro
       ],
     );
-    assert!(detect(&p, &Ignore::default(), 10.0).is_empty());
+    assert!(detect(&p, &Ignore::default(), &[], 10.0).is_empty());
   }
 
   #[test]
@@ -494,7 +488,7 @@ mod tests {
         path(110.0, 110.0, 490.0, 210.0),
       ],
     );
-    assert!(detect(&p, &Ignore::default(), 10.0).is_empty());
+    assert!(detect(&p, &Ignore::default(), &[], 10.0).is_empty());
   }
 
   #[test]
@@ -519,7 +513,7 @@ mod tests {
       bbox: Rect::new(100.0, 100.0, 400.0, 300.0),
     };
     let p = page(vec![], vec![image]);
-    assert_eq!(detect(&p, &Ignore::default(), 10.0)[0].raster, Some(0));
+    assert_eq!(detect(&p, &Ignore::default(), &[], 10.0)[0].raster, Some(0));
     assert!(
       detect(
         &p,
@@ -527,6 +521,7 @@ mod tests {
           images: HashSet::from([0]),
           ..Ignore::default()
         },
+        &[],
         10.0
       )
       .is_empty()

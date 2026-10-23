@@ -6,6 +6,7 @@ use crate::figures::Figure;
 use crate::layout::{Element, PageContent};
 use crate::model::{Line, Script, Style};
 use crate::outline::OutlineEntry;
+use crate::tables::Table;
 use crate::text::{self, ListKind, Vocabulary};
 
 /// Trecho de texto dentro de um parágrafo.
@@ -53,6 +54,8 @@ pub enum Block {
     file: String,
     alt: String,
   },
+  /// Tabela; a primeira linha é o cabeçalho.
+  Table(Vec<Vec<Vec<Inline>>>),
   /// Nota de rodapé; o Markdown a coloca no fim do capítulo.
   Footnote {
     id: String,
@@ -105,6 +108,7 @@ enum Item<'a> {
   },
   Line(&'a Line),
   Figure(&'a Figure),
+  Table(&'a Table),
 }
 
 /// Monta os blocos do livro inteiro, usando o outline quando houver e parecer completo.
@@ -154,39 +158,38 @@ pub fn build_blocks(pages: &[PageContent], outline: &[OutlineEntry]) -> Structur
   }
 }
 
-/// Encaixa as figuras da página entre os itens, antes da linha que as segue na ordem de leitura.
+/// Encaixa as figuras e tabelas da página entre os itens, antes da linha que as segue na ordem
+/// de leitura.
 fn with_figures<'a>(page: &'a PageContent, items: Vec<Item<'a>>) -> Vec<Item<'a>> {
-  let mut anchored: Vec<(Option<&'a Line>, &'a Figure)> = Vec::new();
-  let mut waiting: Vec<&'a Figure> = Vec::new();
+  let mut pending: Vec<Option<(Option<&'a Line>, Item<'a>)>> = Vec::new();
+  let mut waiting: Vec<Item<'a>> = Vec::new();
   for element in &page.elements {
     match element {
-      Element::Figure(figure) => waiting.push(figure),
-      Element::Line(line) => anchored.extend(waiting.drain(..).map(|f| (Some(line), f))),
+      Element::Figure(figure) => waiting.push(Item::Figure(figure)),
+      Element::Table(table) => waiting.push(Item::Table(table)),
+      Element::Line(line) => pending.extend(waiting.drain(..).map(|item| Some((Some(line), item)))),
     }
   }
-  anchored.extend(waiting.into_iter().map(|f| (None, f)));
-  if anchored.is_empty() {
+  pending.extend(waiting.into_iter().map(|item| Some((None, item))));
+  if pending.is_empty() {
     return items;
   }
-  let mut placed = vec![false; anchored.len()];
-  let mut out = Vec::with_capacity(items.len() + anchored.len());
+  let mut out = Vec::with_capacity(items.len() + pending.len());
   for item in items {
     if let Item::Line(line) = &item {
-      for (i, (anchor, figure)) in anchored.iter().enumerate() {
-        if !placed[i] && anchor.is_some_and(|a| std::ptr::eq(a, *line)) {
-          out.push(Item::Figure(figure));
-          placed[i] = true;
+      for slot in pending.iter_mut() {
+        let here = slot
+          .as_ref()
+          .is_some_and(|(anchor, _)| anchor.is_some_and(|a| std::ptr::eq(a, *line)));
+        if here {
+          out.push(slot.take().unwrap().1);
         }
       }
     }
     out.push(item);
   }
-  // Figuras cuja linha seguinte virou título (ou no fim da página).
-  for (i, (_, figure)) in anchored.iter().enumerate() {
-    if !placed[i] {
-      out.push(Item::Figure(figure));
-    }
-  }
+  // Figuras e tabelas cuja linha seguinte virou título (ou no fim da página).
+  out.extend(pending.into_iter().flatten().map(|(_, item)| item));
   out
 }
 
@@ -738,6 +741,11 @@ impl Assembler<'_> {
     });
   }
 
+  fn table(&mut self, table: &Table) {
+    self.close();
+    self.blocks.push(Block::Table(table.rows.clone()));
+  }
+
   fn footnote(&mut self, id: String, content: Vec<Inline>) {
     self.blocks.push(Block::Footnote { id, content });
   }
@@ -1123,6 +1131,7 @@ fn assemble(
           prev = None;
         }
         Item::Figure(figure) => asm.figure(figure),
+        Item::Table(table) => asm.table(table),
         Item::Line(line)
           if notes
             .iter()
@@ -1374,6 +1383,7 @@ mod tests {
         } => format!("li{depth} {kind:?} {}", inline_text(content)),
         Block::Code(code) => format!("code {code}"),
         Block::Image { file, .. } => format!("img {file}"),
+        Block::Table(rows) => format!("table {}x{}", rows.len(), rows[0].len()),
         Block::Footnote { id, content } => format!("note {id} {}", inline_text(content)),
       })
       .collect()

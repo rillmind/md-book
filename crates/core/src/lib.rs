@@ -13,6 +13,7 @@ mod model;
 mod outline;
 mod pdfium;
 mod structure;
+mod tables;
 mod text;
 
 use std::path::{Path, PathBuf};
@@ -123,20 +124,28 @@ pub fn analyze(
   furniture::remove_headers_and_footers(&mut pages);
   furniture::remove_reference_pages(&mut pages);
   let body = body_size(&pages);
+  let tables: Vec<Vec<tables::Table>> = pages
+    .iter_mut()
+    .map(|page| tables::extract_tables(page, body))
+    .collect();
   let ignore = figures::Ignore {
     images: figures::decorative_assets(&extracted.assets),
     paths: figures::repeated_paths(&pages),
-    regions: Vec::new(),
   };
   let mut candidates: Vec<_> = pages
     .iter()
-    .map(|page| figures::detect(page, &ignore, body))
+    .zip(&tables)
+    .map(|(page, tables)| {
+      let taken: Vec<model::Rect> = tables.iter().map(|t| t.bbox).collect();
+      figures::detect(page, &ignore, &taken, body)
+    })
     .collect();
   figures::drop_repeated(&mut candidates);
   let contents: Vec<layout::PageContent> = pages
     .into_iter()
     .zip(candidates)
-    .map(|(mut page, candidates)| {
+    .zip(tables)
+    .map(|((mut page, candidates), tables)| {
       let found = figures::extract_figures(
         &document,
         &mut page,
@@ -145,7 +154,7 @@ pub fn analyze(
         body,
         assets.path(),
       );
-      layout::arrange(page, found)
+      layout::arrange(page, found, tables)
     })
     .collect();
   let outline = if options.use_outline {

@@ -65,6 +65,10 @@ pub fn extract(
     for object in page.objects().iter() {
       ctx.collect(&object, &mut graphics, 0);
     }
+    // Marcas de corte e registro da gráfica ficam fora da área visível.
+    graphics.retain(|g: &Graphic| {
+      g.bbox.x1 > 0.0 && g.bbox.y1 > 0.0 && g.bbox.x0 < width && g.bbox.y0 < height
+    });
     out.pages.push(Page {
       number,
       width,
@@ -161,7 +165,19 @@ fn extract_lines(text: &PdfPageText, origin: Origin) -> Vec<Line> {
     builder.push(c, rect, size, baseline, style);
   }
   builder.end_line();
-  builder.lines
+  dedupe(builder.lines)
+}
+
+/// Texto impresso duas vezes no mesmo lugar (negrito simulado, sombra) aparece em dobro.
+fn dedupe(lines: Vec<Line>) -> Vec<Line> {
+  let mut seen = std::collections::HashSet::new();
+  lines
+    .into_iter()
+    .filter(|l| {
+      let b = l.bbox;
+      seen.insert((l.text(), [b.x0, b.y0, b.x1, b.y1].map(|v| v.round() as i32)))
+    })
+    .collect()
 }
 
 fn is_invisible(c: char) -> bool {
