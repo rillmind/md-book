@@ -9,8 +9,12 @@ deunicode = "1.6.2"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 include_dir = "0.7.4"
 pdfium-render = "0.9.4"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
 tempfile = "3.27.0"
 thiserror = "2.0.21"
+toml = "1"
+ureq = "3"
 
 [features]
 # Linka o PDFium estaticamente (requer PDFIUM_STATIC_LIB_PATH com libpdfium.a).

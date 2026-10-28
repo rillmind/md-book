@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use mdbook_gen_core::{
-  Block, Book, HeadingSource, Options, OutputLayout, WriteOptions, analyze, write_book,
+  Block, Book, HeadingSource, Options, OutputLayout, Template, WriteOptions, analyze, write_book,
 };
 
 const CHAPTERS: [&str; 3] = [
@@ -22,7 +22,7 @@ fn opts(force: bool, layout: OutputLayout) -> WriteOptions {
   WriteOptions {
     force,
     layout,
-    obsidian: true,
+    obsidian: Some(Template::Embedded),
   }
 }
 
@@ -257,7 +257,9 @@ fn every_layout_gets_the_obsidian_settings_unless_disabled() {
     let written = write_book(&book, &out, &opts(false, layout)).unwrap();
     assert!(written.obsidian.is_some_and(|r| !r.missing.is_empty()));
     assert!(
-      mdbook_gen_core::check_obsidian(&out).is_up_to_date(),
+      mdbook_gen_core::check_obsidian(&out, &Template::Embedded)
+        .unwrap()
+        .is_up_to_date(),
       "{layout:?}"
     );
     assert!(out.join(".obsidian/hotkeys.json").exists());
@@ -271,7 +273,7 @@ fn every_layout_gets_the_obsidian_settings_unless_disabled() {
   let out = std::env::temp_dir().join(format!("mdbook-gen-noobs-{}", std::process::id()));
   let _ = std::fs::remove_dir_all(&out);
   let options = WriteOptions {
-    obsidian: false,
+    obsidian: None,
     ..opts(false, OutputLayout::Flat)
   };
   let written = write_book(&book, &out, &options).unwrap();
@@ -285,7 +287,7 @@ fn folder_with_only_obsidian_settings_does_not_need_force() {
   let out = std::env::temp_dir().join(format!("mdbook-gen-prep-{}", std::process::id()));
   let _ = std::fs::remove_dir_all(&out);
   std::fs::create_dir_all(&out).unwrap();
-  mdbook_gen_core::apply_obsidian(&out).unwrap();
+  mdbook_gen_core::apply_obsidian(&out, &Template::Embedded).unwrap();
   write_book(&book, &out, &opts(false, OutputLayout::MdBook)).unwrap();
   std::fs::remove_dir_all(&out).unwrap();
 }

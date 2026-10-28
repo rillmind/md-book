@@ -4,6 +4,7 @@
 //! [`analyze`] lê o PDF e monta o [`Book`] em memória; [`write_book`] grava em disco.
 
 mod book;
+mod config;
 mod extract;
 mod figures;
 mod furniture;
@@ -21,10 +22,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub use book::{FULL_FILE, OutputLayout, WriteOptions, WrittenBook, write_book};
+pub use config::{CACHE_ENV, CONFIG_ENV, SaveReport, config_dir, save as save_config};
 pub use markdown::render_chapter;
 pub use model::Style;
 pub use obsidian::{
-  CONFIG_DIR as OBSIDIAN_DIR, ConfigReport, apply as apply_obsidian, check as check_obsidian,
+  CONFIG_DIR as OBSIDIAN_DIR, ConfigReport, Template, apply as apply_obsidian,
+  check as check_obsidian,
 };
 pub use pdfium::PDFIUM_ENV;
 pub use structure::{Block, Chapter, FRONT_MATTER_TITLE, HeadingSource, Inline};
@@ -44,6 +47,10 @@ pub enum Error {
   NoText,
   #[error("o diretório de saída {0} não está vazio (use --force para sobrescrever)")]
   OutputNotEmpty(PathBuf),
+  #[error("configuração inválida: {0}")]
+  Config(String),
+  #[error("falha ao baixar da comunidade do Obsidian: {0}")]
+  Network(String),
   #[error(transparent)]
   Io(#[from] std::io::Error),
 }

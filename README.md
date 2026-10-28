@@ -66,8 +66,22 @@ pasta que só tem o `.obsidian` não exige `--force`.
 - `--apply-config <pastas>`: só confere e aplica as configurações, sem converter PDF; serve para
   livros gerados antes ou vaults que perderam alguma configuração. Não combina com as opções de
   conversão.
-- Para mudar o padrão: ajuste o vault de referência, rode `scripts/atualizar-obsidian.sh` e
-  recompile.
+- `--save-config [vault]`: registra o `.obsidian` de um vault (padrão: a pasta atual) como o
+  **seu** padrão, que passa a valer no lugar do embutido. Ele fica em `~/.config/md-book`
+  (ou `$XDG_CONFIG_HOME/md-book`, ou `$MD_BOOK_CONFIG`), pronto para os dotfiles:
+
+  ```
+  ~/.config/md-book/
+  ├── config.toml   # plugins e temas da comunidade: id, repositório e versão
+  └── obsidian/     # o resto, como está: app.json, hotkeys.json, snippets, data.json dos
+                    # plugins e plugins/temas que não estão na comunidade
+  ```
+
+  Plugins e temas da comunidade são baixados do GitHub na primeira vez que forem usados e
+  guardados em `~/.cache/md-book`. Para trocar um plugin: troque no vault, rode
+  `md-book --save-config` nele e, se quiser atualizar livros já gerados, `md-book --apply-config
+  <pastas>`. Para voltar ao padrão embutido, apague `~/.config/md-book`.
+- Padrão embutido: vem do vault de referência via `scripts/atualizar-obsidian.sh` (e recompilar).
 
 Sem instalar, rode direto do repositório: `cargo run --release -- livro.pdf -o meu-livro`.
 

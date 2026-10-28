@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::markdown::{IMAGES_DIR, escape_link_text, render_chapter, render_chapter_at};
-use crate::obsidian::{self, ConfigReport};
+use crate::obsidian::{self, ConfigReport, Template};
 use crate::structure::Block;
 use crate::{Book, Error};
 
@@ -26,13 +26,14 @@ pub enum OutputLayout {
 pub const FULL_FILE: &str = "book.md";
 
 /// Como gravar o livro.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteOptions {
   /// Aceita um diretório de saída que já tem conteúdo.
   pub force: bool,
   pub layout: OutputLayout,
-  /// Garante as configurações padrão do Obsidian em `.obsidian` (temas, plugins, atalhos).
-  pub obsidian: bool,
+  /// Configurações do Obsidian a garantir em `.obsidian` (temas, plugins, atalhos); `None` não
+  /// mexe nelas.
+  pub obsidian: Option<Template>,
 }
 
 impl Default for WriteOptions {
@@ -40,7 +41,7 @@ impl Default for WriteOptions {
     Self {
       force: false,
       layout: OutputLayout::default(),
-      obsidian: true,
+      obsidian: Some(Template::Embedded),
     }
   }
 }
@@ -83,7 +84,8 @@ pub fn write_book(
   };
   let obsidian = options
     .obsidian
-    .then(|| obsidian::apply(out_dir))
+    .as_ref()
+    .map(|template| obsidian::apply(out_dir, template))
     .transpose()?;
   Ok(WrittenBook {
     root: out_dir.to_path_buf(),
