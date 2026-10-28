@@ -3,7 +3,8 @@
 use std::path::PathBuf;
 
 use mdbook_gen_core::{
-  Block, Book, HeadingSource, Options, OutputLayout, Template, WriteOptions, analyze, write_book,
+  Block, Book, HeadingSource, ObsidianOutcome, Options, OutputLayout, Template, WriteOptions,
+  analyze, write_book,
 };
 
 const CHAPTERS: [&str; 3] = [
@@ -255,7 +256,9 @@ fn every_layout_gets_the_obsidian_settings_unless_disabled() {
       std::env::temp_dir().join(format!("mdbook-gen-obs-{layout:?}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&out);
     let written = write_book(&book, &out, &opts(false, layout)).unwrap();
-    assert!(written.obsidian.is_some_and(|r| !r.missing.is_empty()));
+    assert!(
+      matches!(&written.obsidian, Some(ObsidianOutcome::Applied(r)) if !r.missing.is_empty())
+    );
     assert!(
       mdbook_gen_core::check_obsidian(&out, &Template::Embedded)
         .unwrap()
@@ -266,7 +269,7 @@ fn every_layout_gets_the_obsidian_settings_unless_disabled() {
 
     // Rodar de novo na mesma pasta: as configurações já estão lá.
     let again = write_book(&book, &out, &opts(true, layout)).unwrap();
-    assert!(again.obsidian.unwrap().is_up_to_date());
+    assert!(matches!(&again.obsidian, Some(ObsidianOutcome::Applied(r)) if r.is_up_to_date()));
     std::fs::remove_dir_all(&out).unwrap();
   }
 
@@ -290,4 +293,24 @@ fn folder_with_only_obsidian_settings_does_not_need_force() {
   mdbook_gen_core::apply_obsidian(&out, &Template::Embedded).unwrap();
   write_book(&book, &out, &opts(false, OutputLayout::MdBook)).unwrap();
   std::fs::remove_dir_all(&out).unwrap();
+}
+
+#[test]
+fn book_inside_an_existing_vault_reuses_its_settings() {
+  let book = convert("figuras.pdf");
+  let vault = std::env::temp_dir().join(format!("mdbook-gen-vault-{}", std::process::id()));
+  let _ = std::fs::remove_dir_all(&vault);
+  mdbook_gen_core::apply_obsidian(&vault, &Template::Embedded).unwrap();
+
+  let out = vault.join("Livros").join("Figuras");
+  let written = write_book(&book, &out, &opts(false, OutputLayout::Flat)).unwrap();
+  assert!(
+    matches!(&written.obsidian, Some(ObsidianOutcome::InsideVault(v)) if *v == vault.canonicalize().unwrap())
+  );
+  assert!(!out.join(".obsidian").exists());
+
+  // As imagens vão marcadas para o image-darkmodifier.
+  let chapter = std::fs::read_to_string(&written.chapter_files[0]).unwrap();
+  assert!(chapter.contains("@darkmode](images/"));
+  std::fs::remove_dir_all(&vault).unwrap();
 }

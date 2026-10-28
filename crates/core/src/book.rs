@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::markdown::{IMAGES_DIR, escape_link_text, render_chapter, render_chapter_at};
-use crate::obsidian::{self, ConfigReport, Template};
+use crate::obsidian::{self, Outcome, Template};
 use crate::structure::Block;
 use crate::{Book, Error};
 
@@ -54,7 +54,7 @@ pub struct WrittenBook {
   /// Imagens copiadas para a pasta `images`.
   pub images: usize,
   /// O que foi feito em `.obsidian`, quando as configurações estão ligadas.
-  pub obsidian: Option<ConfigReport>,
+  pub obsidian: Option<Outcome>,
 }
 
 /// Escreve o livro em `out_dir`.
@@ -85,7 +85,7 @@ pub fn write_book(
   let obsidian = options
     .obsidian
     .as_ref()
-    .map(|template| obsidian::apply(out_dir, template))
+    .map(|template| obsidian::ensure(out_dir, template))
     .transpose()?;
   Ok(WrittenBook {
     root: out_dir.to_path_buf(),

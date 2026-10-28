@@ -4,7 +4,8 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use mdbook_gen_core::{
-  ConfigReport, HeadingSource, Options, OutputLayout, Progress, Template, WriteOptions,
+  ConfigReport, HeadingSource, ObsidianOutcome, Options, OutputLayout, Progress, Template,
+  WriteOptions,
 };
 
 /// Gera um livro mdBook (book.toml + src/SUMMARY.md + um .md por capítulo) a partir de um PDF de texto.
@@ -169,12 +170,17 @@ fn main() -> Result<()> {
     book.chapters.len(),
     written.images,
   );
-  if let (Some(report), Some(template)) = (&written.obsidian, &write.obsidian) {
-    println!(
+  match (&written.obsidian, &write.obsidian) {
+    (Some(ObsidianOutcome::Applied(report)), Some(template)) => println!(
       "configurações do Obsidian ({}): {}",
       template_name(template),
       describe(report)
-    );
+    ),
+    (Some(ObsidianOutcome::InsideVault(vault)), _) => println!(
+      "configurações do Obsidian: não criadas, a pasta já está dentro do vault {}",
+      vault.display()
+    ),
+    _ => {}
   }
   if book.outline_ignored {
     eprintln!("aviso: os bookmarks do PDF estavam incompletos e foram ignorados");
@@ -244,8 +250,20 @@ fn apply_config(dirs: &[PathBuf]) -> Result<()> {
       failed = true;
       continue;
     }
-    let report = mdbook_gen_core::apply_obsidian(dir, &template)
-      .with_context(|| format!("falha ao aplicar as configurações em {}", dir.display()))?;
+    let report = match mdbook_gen_core::ensure_obsidian(dir, &template)
+      .with_context(|| format!("falha ao aplicar as configurações em {}", dir.display()))?
+    {
+      ObsidianOutcome::Applied(report) => report,
+      ObsidianOutcome::InsideVault(vault) => {
+        println!(
+          "{}: nada feito, a pasta fica dentro do vault {} (para conferir o vault: md-book --apply-config {})",
+          dir.display(),
+          vault.display(),
+          vault.display()
+        );
+        continue;
+      }
+    };
     println!("{}: {}", dir.display(), describe(&report));
     for path in report.missing.iter().chain(&report.outdated) {
       println!("    {}", path.display());

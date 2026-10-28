@@ -74,6 +74,34 @@ impl ConfigReport {
   }
 }
 
+/// O que [`ensure`] fez.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Outcome {
+  /// Configurações conferidas e aplicadas em `dir/.obsidian`.
+  Applied(ConfigReport),
+  /// Nada foi feito: `dir` já fica dentro deste vault (uma pasta acima com `.obsidian`), e um
+  /// `.obsidian` próprio duplicaria as configurações.
+  InsideVault(PathBuf),
+}
+
+/// Vault que contém `dir`: a pasta acima dele (não ele mesmo) mais próxima que tem `.obsidian`.
+pub fn enclosing_vault(dir: &Path) -> Option<PathBuf> {
+  let dir = dir.canonicalize().ok()?;
+  dir
+    .ancestors()
+    .skip(1)
+    .find(|a| a.join(CONFIG_DIR).is_dir())
+    .map(Path::to_path_buf)
+}
+
+/// Garante as configurações em `dir`, a menos que ele já esteja dentro de outro vault.
+pub fn ensure(dir: &Path, template: &Template) -> Result<Outcome, Error> {
+  match enclosing_vault(dir) {
+    Some(vault) => Ok(Outcome::InsideVault(vault)),
+    None => apply(dir, template).map(Outcome::Applied),
+  }
+}
+
 /// Confere se `dir/.obsidian` tem todas as configurações do padrão, sem alterar nada.
 pub fn check(dir: &Path, template: &Template) -> Result<ConfigReport, Error> {
   Ok(compare(dir, &template.files()?))
@@ -187,6 +215,24 @@ mod tests {
     assert!(dir.join(".obsidian/plugins/extra/main.js").exists());
     assert!(dir.join(".obsidian/workspace.json").exists());
     fs::remove_dir_all(&dir).unwrap();
+  }
+
+  #[test]
+  fn folder_inside_a_vault_gets_no_duplicate_settings() {
+    let vault = temp("vault");
+    fs::create_dir_all(vault.join(".obsidian")).unwrap();
+    let book = vault.join("Livros/Meu Livro");
+    fs::create_dir_all(&book).unwrap();
+
+    let outcome = ensure(&book, &Template::Embedded).unwrap();
+    assert_eq!(outcome, Outcome::InsideVault(vault.canonicalize().unwrap()));
+    assert!(!book.join(".obsidian").exists());
+    // A raiz do próprio vault não está "dentro de outro vault".
+    assert!(matches!(
+      ensure(&vault, &Template::Embedded).unwrap(),
+      Outcome::Applied(_)
+    ));
+    fs::remove_dir_all(&vault).unwrap();
   }
 
   #[test]

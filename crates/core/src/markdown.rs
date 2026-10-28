@@ -10,6 +10,10 @@ use crate::text::ListKind;
 /// Diretório das imagens, relativo a `src/` (onde ficam os capítulos).
 pub const IMAGES_DIR: &str = "images";
 
+/// Filtro do plugin image-darkmodifier do Obsidian, posto em todas as imagens: no tema escuro
+/// inverte a imagem e remove o fundo; no claro (modo "theme aware") mantém as cores.
+pub const DARKMODE_FILTER: &str = "@darkmode";
+
 pub fn render_chapter(chapter: &Chapter) -> String {
   render_chapter_at(chapter, 1)
 }
@@ -42,10 +46,14 @@ pub fn render_chapter_at(chapter: &Chapter, base: u8) -> String {
       Block::Footnote { id, content } => notes.push((id, content)),
       Block::Table(rows) => out.push_str(&render_table(rows)),
       Block::Image { file, alt } => {
-        out.push_str(&format!(
-          "![{}]({IMAGES_DIR}/{file})\n\n",
-          escape_link_text(alt)
-        ));
+        // O plugin image-darkmodifier escurece as imagens marcadas com o filtro no texto alternativo.
+        let alt = escape_link_text(alt);
+        let alt = if alt.is_empty() {
+          DARKMODE_FILTER.to_string()
+        } else {
+          format!("{alt} {DARKMODE_FILTER}")
+        };
+        out.push_str(&format!("![{alt}]({IMAGES_DIR}/{file})\n\n"));
       }
       Block::Heading { level, text } => {
         let hashes = (level.saturating_sub(chapter.depth) + base).clamp(base + 1, 6) as usize;
@@ -452,6 +460,24 @@ mod tests {
     assert_eq!(
       render_chapter(&c),
       "# Capítulo 1\n\n| Op | Uso |\n| --- | --- |\n| \\| |   |\n"
+    );
+  }
+
+  #[test]
+  fn images_get_the_darkmode_filter() {
+    let c = chapter(vec![
+      Block::Image {
+        file: "fig-0001-1.png".into(),
+        alt: "Figura 1.1 Arquitetura".into(),
+      },
+      Block::Image {
+        file: "img-0002.jpg".into(),
+        alt: String::new(),
+      },
+    ]);
+    assert_eq!(
+      render_chapter(&c),
+      "# Capítulo 1\n\n![Figura 1.1 Arquitetura @darkmode](images/fig-0001-1.png)\n\n![@darkmode](images/img-0002.jpg)\n"
     );
   }
 

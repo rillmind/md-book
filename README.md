@@ -61,11 +61,19 @@ atalhos, snippets e configurações padrão embutidos no `md-book` (lista e lice
 padrão é restaurado; arquivos extras (outros plugins, abas abertas) nunca são apagados, e uma
 pasta que só tem o `.obsidian` não exige `--force`.
 
+Se a pasta de saída já fica **dentro de um vault** (alguma pasta acima dela tem `.obsidian`), o
+`md-book` não cria outro `.obsidian`, para não duplicar configurações: o livro usa as do vault.
+
+Todas as imagens saem marcadas com o filtro `@darkmode` do plugin
+[image-darkmodifier](https://github.com/0qln/obsidian-image-darkmodifier)
+(`![legenda @darkmode](images/fig.png)`): no tema escuro do Obsidian elas são invertidas e
+perdem o fundo branco; no claro ficam como estão.
+
 - `--no-config`: não mexe no `.obsidian` (por exemplo, ao gerar dentro de um vault existente,
   para não criar um vault dentro de outro).
 - `--apply-config <pastas>`: só confere e aplica as configurações, sem converter PDF; serve para
-  livros gerados antes ou vaults que perderam alguma configuração. Não combina com as opções de
-  conversão.
+  livros gerados antes ou vaults que perderam alguma configuração. Pastas dentro de outro vault
+  são puladas (aplique na raiz do vault). Não combina com as opções de conversão.
 - `--save-config [vault]`: registra o `.obsidian` de um vault (padrão: a pasta atual) como o
   **seu** padrão, que passa a valer no lugar do embutido. Ele fica em `~/.config/md-book`
   (ou `$XDG_CONFIG_HOME/md-book`, ou `$MD_BOOK_CONFIG`), pronto para os dotfiles:

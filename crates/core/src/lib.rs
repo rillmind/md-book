@@ -26,8 +26,8 @@ pub use config::{CACHE_ENV, CONFIG_ENV, SaveReport, config_dir, save as save_con
 pub use markdown::render_chapter;
 pub use model::Style;
 pub use obsidian::{
-  CONFIG_DIR as OBSIDIAN_DIR, ConfigReport, Template, apply as apply_obsidian,
-  check as check_obsidian,
+  CONFIG_DIR as OBSIDIAN_DIR, ConfigReport, Outcome as ObsidianOutcome, Template,
+  apply as apply_obsidian, check as check_obsidian, enclosing_vault, ensure as ensure_obsidian,
 };
 pub use pdfium::PDFIUM_ENV;
 pub use structure::{Block, Chapter, FRONT_MATTER_TITLE, HeadingSource, Inline};
