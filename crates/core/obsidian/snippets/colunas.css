@@ -1,0 +1,46 @@
+/* Cada "tela" tem 2 colunas da altura do painel; o texto enche a da
+   esquerda, depois a da direita, e continua na tela de baixo. */
+.markdown-reading-view {
+  --colunas-margem: 2rem;
+}
+
+.markdown-reading-view .markdown-preview-view {
+  container-type: size;
+  padding-block: var(--colunas-margem);
+}
+
+.markdown-reading-view .markdown-preview-sizer {
+  --colunas-altura: calc(100cqh - 2 * var(--colunas-margem));
+  column-count: 2;
+  column-gap: 3rem;
+  column-height: var(--colunas-altura);
+  column-wrap: wrap;
+  /* com esse espaçamento, cada tela começa exatamente uma altura de painel abaixo da anterior */
+  row-gap: calc(2 * var(--colunas-margem));
+  max-width: none !important;
+  /* o Obsidian soma alturas de trechos medidas como se fossem uma coluna só,
+     o que gera espaço vazio no fim; com o plugin colunas-fixas não é preciso */
+  min-height: 0 !important;
+}
+
+.markdown-reading-view .markdown-preview-pusher {
+  margin-bottom: 0 !important;
+}
+
+.markdown-reading-view h1,
+.markdown-reading-view h2,
+.markdown-reading-view h3 {
+  break-after: avoid;
+}
+
+.markdown-reading-view pre,
+.markdown-reading-view img,
+.markdown-reading-view table {
+  break-inside: avoid;
+}
+
+/* figura maior que a coluna seria cortada */
+.markdown-reading-view img {
+  max-height: calc(100cqh - 2 * var(--colunas-margem));
+  object-fit: contain;
+}

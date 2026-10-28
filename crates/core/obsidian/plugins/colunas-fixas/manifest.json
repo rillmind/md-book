@@ -1,0 +1,9 @@
+{
+	"id": "colunas-fixas",
+	"name": "Colunas fixas",
+	"version": "1.0.0",
+	"minAppVersion": "1.0.0",
+	"description": "Desenha a nota inteira de uma vez no modo de leitura, para o layout em colunas não mudar ao rolar.",
+	"author": "raul",
+	"isDesktopOnly": false
+}

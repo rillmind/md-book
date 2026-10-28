@@ -2,7 +2,9 @@
 
 use std::path::PathBuf;
 
-use mdbook_gen_core::{Block, Book, HeadingSource, Options, OutputLayout, analyze, write_book};
+use mdbook_gen_core::{
+  Block, Book, HeadingSource, Options, OutputLayout, WriteOptions, analyze, write_book,
+};
 
 const CHAPTERS: [&str; 3] = [
   "1 Introdução",
@@ -14,6 +16,14 @@ fn fixture(name: &str) -> PathBuf {
   PathBuf::from(env!("CARGO_MANIFEST_DIR"))
     .join("tests/fixtures")
     .join(name)
+}
+
+fn opts(force: bool, layout: OutputLayout) -> WriteOptions {
+  WriteOptions {
+    force,
+    layout,
+    obsidian: true,
+  }
 }
 
 fn convert(name: &str) -> Book {
@@ -84,7 +94,7 @@ fn writes_mdbook_project() {
   let out = std::env::temp_dir().join(format!("mdbook-gen-test-{}", std::process::id()));
   let _ = std::fs::remove_dir_all(&out);
 
-  let written = write_book(&book, &out, false, OutputLayout::MdBook).unwrap();
+  let written = write_book(&book, &out, &opts(false, OutputLayout::MdBook)).unwrap();
   assert_eq!(written.chapter_files.len(), 4);
   let summary = std::fs::read_to_string(out.join("src/SUMMARY.md")).unwrap();
   assert!(summary.contains("- [1 Introdução](./02-1-introducao.md)"));
@@ -92,8 +102,8 @@ fn writes_mdbook_project() {
   assert!(toml.contains("title = \"Guia de Teste\""));
 
   // Diretório não vazio só é sobrescrito com force.
-  assert!(write_book(&book, &out, false, OutputLayout::MdBook).is_err());
-  write_book(&book, &out, true, OutputLayout::MdBook).unwrap();
+  assert!(write_book(&book, &out, &opts(false, OutputLayout::MdBook)).is_err());
+  write_book(&book, &out, &opts(true, OutputLayout::MdBook)).unwrap();
 
   std::fs::remove_dir_all(&out).unwrap();
 }
@@ -133,7 +143,7 @@ fn extracts_photo_and_vector_figure_with_captions() {
 
   let out = std::env::temp_dir().join(format!("mdbook-gen-fig-{}", std::process::id()));
   let _ = std::fs::remove_dir_all(&out);
-  let written = write_book(&book, &out, false, OutputLayout::MdBook).unwrap();
+  let written = write_book(&book, &out, &opts(false, OutputLayout::MdBook)).unwrap();
   assert_eq!(written.images, 2);
   assert_eq!(
     std::fs::read_dir(out.join("src/images")).unwrap().count(),
@@ -187,8 +197,8 @@ fn flat_layout_writes_only_chapters_and_images() {
   // Uma nota que já existia na pasta (ex.: vault do Obsidian) não pode ser apagada.
   std::fs::write(out.join("minha-nota.md"), "não apagar").unwrap();
 
-  assert!(write_book(&book, &out, false, OutputLayout::Flat).is_err());
-  let written = write_book(&book, &out, true, OutputLayout::Flat).unwrap();
+  assert!(write_book(&book, &out, &opts(false, OutputLayout::Flat)).is_err());
+  let written = write_book(&book, &out, &opts(true, OutputLayout::Flat)).unwrap();
   assert!(!out.join("book.toml").exists() && !out.join("src").exists());
   assert!(!out.join("SUMMARY.md").exists());
   assert_eq!(written.images, 2);
@@ -209,10 +219,18 @@ fn full_layout_writes_the_whole_book_in_one_file() {
   let out = std::env::temp_dir().join(format!("mdbook-gen-full-{}", std::process::id()));
   let _ = std::fs::remove_dir_all(&out);
 
-  let written = write_book(&book, &out, false, OutputLayout::Full).unwrap();
-  assert_eq!(written.chapter_files, [out.join("guia-de-teste.md")]);
-  let entries: Vec<_> = std::fs::read_dir(&out).unwrap().collect();
-  assert_eq!(entries.len(), 1, "só o .md (o fixture não tem imagens)");
+  let written = write_book(&book, &out, &opts(false, OutputLayout::Full)).unwrap();
+  assert_eq!(written.chapter_files, [out.join("book.md")]);
+  let mut entries: Vec<String> = std::fs::read_dir(&out)
+    .unwrap()
+    .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+    .collect();
+  entries.sort();
+  assert_eq!(
+    entries,
+    [".obsidian", "book.md"],
+    "o fixture não tem imagens"
+  );
 
   let text = std::fs::read_to_string(&written.chapter_files[0]).unwrap();
   let headings: Vec<&str> = text.lines().filter(|l| l.starts_with('#')).collect();
@@ -226,5 +244,48 @@ fn full_layout_writes_the_whole_book_in_one_file() {
     ]
   );
   assert!(headings.contains(&"# 3 Uso Avançado"));
+  std::fs::remove_dir_all(&out).unwrap();
+}
+
+#[test]
+fn every_layout_gets_the_obsidian_settings_unless_disabled() {
+  let book = convert("outline-completo.pdf");
+  for layout in [OutputLayout::MdBook, OutputLayout::Flat, OutputLayout::Full] {
+    let out =
+      std::env::temp_dir().join(format!("mdbook-gen-obs-{layout:?}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&out);
+    let written = write_book(&book, &out, &opts(false, layout)).unwrap();
+    assert!(written.obsidian.is_some_and(|r| !r.missing.is_empty()));
+    assert!(
+      mdbook_gen_core::check_obsidian(&out).is_up_to_date(),
+      "{layout:?}"
+    );
+    assert!(out.join(".obsidian/hotkeys.json").exists());
+
+    // Rodar de novo na mesma pasta: as configurações já estão lá.
+    let again = write_book(&book, &out, &opts(true, layout)).unwrap();
+    assert!(again.obsidian.unwrap().is_up_to_date());
+    std::fs::remove_dir_all(&out).unwrap();
+  }
+
+  let out = std::env::temp_dir().join(format!("mdbook-gen-noobs-{}", std::process::id()));
+  let _ = std::fs::remove_dir_all(&out);
+  let options = WriteOptions {
+    obsidian: false,
+    ..opts(false, OutputLayout::Flat)
+  };
+  let written = write_book(&book, &out, &options).unwrap();
+  assert!(written.obsidian.is_none() && !out.join(".obsidian").exists());
+  std::fs::remove_dir_all(&out).unwrap();
+}
+
+#[test]
+fn folder_with_only_obsidian_settings_does_not_need_force() {
+  let book = convert("outline-completo.pdf");
+  let out = std::env::temp_dir().join(format!("mdbook-gen-prep-{}", std::process::id()));
+  let _ = std::fs::remove_dir_all(&out);
+  std::fs::create_dir_all(&out).unwrap();
+  mdbook_gen_core::apply_obsidian(&out).unwrap();
+  write_book(&book, &out, &opts(false, OutputLayout::MdBook)).unwrap();
   std::fs::remove_dir_all(&out).unwrap();
 }

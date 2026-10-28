@@ -1,0 +1,90 @@
+/* ---- Vimium for Obsidian ---- */
+
+/* Overlay container holding all hint markers. Fixed to the viewport so marker
+   positions can be computed straight from getBoundingClientRect(). */
+.vimium-hint-container {
+	position: fixed;
+	inset: 0;
+	pointer-events: none;
+	z-index: var(--layer-popover, 30);
+}
+
+/* A single hint label sitting at the top-left of its target element.
+   The Vimium-yellow defaults are exposed as custom properties so themes and
+   snippets can restyle the markers. */
+.vimium-hint-marker {
+	position: fixed;
+	display: inline-block;
+	padding: 0 3px;
+	border: 1px solid var(--vimium-hint-border, #c08a00);
+	border-radius: 3px;
+	background: var(--vimium-hint-bg, linear-gradient(#fff785, #ffc542));
+	color: var(--vimium-hint-fg, #302505);
+	font-family: var(--font-monospace, monospace);
+	font-size: var(--vimium-hint-font-size, 11px);
+	font-weight: 700;
+	line-height: 1.4;
+	text-transform: uppercase;
+	box-shadow: var(--shadow-s, 0 2px 4px rgba(0, 0, 0, 0.3));
+	white-space: nowrap;
+	pointer-events: none;
+}
+
+/* The portion of a hint the user has already typed. */
+.vimium-hint-marker .vimium-hint-typed {
+	color: var(--vimium-hint-typed-fg, #d4a017);
+	opacity: 0.55;
+}
+
+/* Markers whose label no longer matches the typed prefix. */
+.vimium-hint-marker.vimium-hint-filtered {
+	display: none;
+}
+
+/* The hint-target-selectors textarea in the settings tab. */
+.vimium-selectors-input {
+	width: 100%;
+	font-family: var(--font-monospace, monospace);
+}
+
+/* Muted path/URL line under a suggestion title in the b/B/O open dialogs. */
+.vimium-omni-detail {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller, 12px);
+}
+
+/* One row in the custom key bindings list: key sequence field + command button. */
+.vimium-keybinding-row .vimium-keybinding-key {
+	width: 8em;
+	text-align: center;
+	font-family: var(--font-monospace, monospace);
+}
+
+/* The shell-command template field in a terminal command row. */
+.vimium-terminal-row .vimium-terminal-command {
+	width: 24em;
+	font-family: var(--font-monospace, monospace);
+}
+
+/* Small status pill shown while a mode is active. Reading uses the theme accent. */
+.vimium-mode-indicator {
+	padding: 2px 10px;
+	border-radius: 6px;
+	background: hsla(var(--accent-h), var(--accent-s), var(--accent-l), 0.18);
+	color: var(--text-accent);
+	font-size: var(--font-ui-smaller, 11px);
+	font-family: var(--font-monospace, monospace);
+	pointer-events: none;
+}
+
+/* Editing mode (vim normal): green. */
+.vimium-mode-indicator.mod-normal {
+	background: rgba(var(--color-green-rgb), 0.18);
+	color: var(--color-green);
+}
+
+/* Vim insert mode inside editing: blue. */
+.vimium-mode-indicator.mod-insert {
+	background: rgba(var(--color-blue-rgb), 0.18);
+	color: var(--color-blue);
+}

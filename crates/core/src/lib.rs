@@ -10,6 +10,7 @@ mod furniture;
 mod layout;
 mod markdown;
 mod model;
+mod obsidian;
 mod outline;
 mod pdfium;
 mod structure;
@@ -19,9 +20,12 @@ mod text;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub use book::{OutputLayout, WrittenBook, write_book};
+pub use book::{FULL_FILE, OutputLayout, WriteOptions, WrittenBook, write_book};
 pub use markdown::render_chapter;
 pub use model::Style;
+pub use obsidian::{
+  CONFIG_DIR as OBSIDIAN_DIR, ConfigReport, apply as apply_obsidian, check as check_obsidian,
+};
 pub use pdfium::PDFIUM_ENV;
 pub use structure::{Block, Chapter, FRONT_MATTER_TITLE, HeadingSource, Inline};
 pub use text::ListKind;

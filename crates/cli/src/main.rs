@@ -3,14 +3,18 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
-use mdbook_gen_core::{HeadingSource, Options, OutputLayout, Progress};
+use mdbook_gen_core::{ConfigReport, HeadingSource, Options, OutputLayout, Progress, WriteOptions};
 
 /// Gera um livro mdBook (book.toml + src/SUMMARY.md + um .md por capítulo) a partir de um PDF de texto.
+///
+/// A pasta gerada já vem como vault do Obsidian, com temas, plugins, atalhos e snippets padrão
+/// em .obsidian (use --no-config para não criar).
 #[derive(Parser)]
 #[command(name = "md-book", version)]
 struct Cli {
   /// PDF de entrada.
-  input: PathBuf,
+  #[arg(required_unless_present = "apply_config")]
+  input: Option<PathBuf>,
 
   /// Diretório do livro [padrão: ./<nome-do-pdf>]
   #[arg(short, long)]
@@ -50,14 +54,38 @@ struct Cli {
   #[arg(long, conflicts_with_all = ["build", "full"])]
   flat: bool,
 
-  /// O livro inteiro num único arquivo .md (com o nome do livro), mais a pasta images/, no
-  /// diretório de saída. Com --force, só sobrescreve esse arquivo e as imagens.
+  /// O livro inteiro num único arquivo book.md, mais a pasta images/, no diretório de saída.
+  /// Com --force, só sobrescreve esse arquivo e as imagens.
   #[arg(long, conflicts_with = "build")]
   full: bool,
+
+  /// Não cria nem atualiza as configurações do Obsidian (.obsidian) na pasta gerada; útil ao
+  /// gerar dentro de um vault que já existe, para não criar um vault dentro de outro.
+  #[arg(long)]
+  no_config: bool,
+
+  /// Confere e aplica as configurações padrão do Obsidian em pastas já existentes, sem converter
+  /// nenhum PDF: cria o que falta e restaura o que difere, sem apagar arquivos extras.
+  #[arg(
+    long,
+    value_name = "DIR",
+    num_args = 1..,
+    conflicts_with_all = [
+      "input", "output", "title", "authors", "language", "split_level", "no_outline",
+      "force", "build", "flat", "full", "no_config",
+    ]
+  )]
+  apply_config: Vec<PathBuf>,
 }
 
 fn main() -> Result<()> {
   let cli = Cli::parse();
+  if !cli.apply_config.is_empty() {
+    return apply_config(&cli.apply_config);
+  }
+  let input = cli
+    .input
+    .expect("clap exige o PDF quando não há --apply-config");
 
   if cli.build && !cfg!(feature = "build") {
     anyhow::bail!(
@@ -73,7 +101,7 @@ fn main() -> Result<()> {
     authors: cli.authors,
     language: cli.language,
   };
-  let output = cli.output.unwrap_or_else(|| default_output(&cli.input));
+  let output = cli.output.unwrap_or_else(|| default_output(&input));
 
   let bar = ProgressBar::new(0).with_style(
     ProgressStyle::with_template("{spinner} {msg} [{bar:30}] {pos}/{len}")
@@ -81,14 +109,14 @@ fn main() -> Result<()> {
       .progress_chars("=> "),
   );
   bar.set_message("Lendo páginas");
-  let book = mdbook_gen_core::analyze(&cli.input, &options, |p| match p {
+  let book = mdbook_gen_core::analyze(&input, &options, |p| match p {
     Progress::Page { done, total } => {
       bar.set_length(total.into());
       bar.set_position(done.into());
     }
     Progress::Structuring => bar.set_message("Montando capítulos"),
   })
-  .with_context(|| format!("falha ao converter {}", cli.input.display()));
+  .with_context(|| format!("falha ao converter {}", input.display()));
   bar.finish_and_clear();
   let book = book?;
 
@@ -97,7 +125,12 @@ fn main() -> Result<()> {
     (_, true) => OutputLayout::Full,
     _ => OutputLayout::MdBook,
   };
-  let written = mdbook_gen_core::write_book(&book, &output, cli.force, layout)?;
+  let write = WriteOptions {
+    force: cli.force,
+    layout,
+    obsidian: !cli.no_config,
+  };
+  let written = mdbook_gen_core::write_book(&book, &output, &write)?;
 
   let source = match book.heading_source {
     HeadingSource::Outline => "bookmarks do PDF",
@@ -114,6 +147,9 @@ fn main() -> Result<()> {
     book.chapters.len(),
     written.images,
   );
+  if let Some(report) = &written.obsidian {
+    println!("configurações do Obsidian: {}", describe(report));
+  }
   if book.outline_ignored {
     eprintln!("aviso: os bookmarks do PDF estavam incompletos e foram ignorados");
   }
@@ -128,6 +164,40 @@ fn main() -> Result<()> {
     build_html(&written.root)?;
   }
   Ok(())
+}
+
+/// Confere e aplica as configurações do Obsidian em cada pasta; falha se alguma não existir.
+fn apply_config(dirs: &[PathBuf]) -> Result<()> {
+  let mut failed = false;
+  for dir in dirs {
+    if !dir.is_dir() {
+      eprintln!("{}: não é uma pasta existente", dir.display());
+      failed = true;
+      continue;
+    }
+    let report = mdbook_gen_core::apply_obsidian(dir)
+      .with_context(|| format!("falha ao aplicar as configurações em {}", dir.display()))?;
+    println!("{}: {}", dir.display(), describe(&report));
+    for path in report.missing.iter().chain(&report.outdated) {
+      println!("    {}", path.display());
+    }
+  }
+  if failed {
+    anyhow::bail!("algumas pastas não existem");
+  }
+  Ok(())
+}
+
+fn describe(report: &ConfigReport) -> String {
+  if report.is_up_to_date() {
+    "já estavam no padrão".to_string()
+  } else {
+    format!(
+      "{} arquivo(s) criado(s), {} restaurado(s) ao padrão",
+      report.missing.len(),
+      report.outdated.len()
+    )
+  }
 }
 
 fn default_output(input: &Path) -> PathBuf {

@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::markdown::{IMAGES_DIR, escape_link_text, render_chapter, render_chapter_at};
+use crate::obsidian::{self, ConfigReport};
 use crate::structure::Block;
 use crate::{Book, Error};
 
@@ -17,8 +18,31 @@ pub enum OutputLayout {
   /// Só os capítulos `.md` e a pasta `images/`, direto no diretório de saída (ex.: dentro de um
   /// vault do Obsidian).
   Flat,
-  /// O livro inteiro num único `.md` (com o nome do livro) e a pasta `images/`.
+  /// O livro inteiro num único `book.md` e a pasta `images/`.
   Full,
+}
+
+/// Nome do arquivo único gerado com [`OutputLayout::Full`].
+pub const FULL_FILE: &str = "book.md";
+
+/// Como gravar o livro.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WriteOptions {
+  /// Aceita um diretório de saída que já tem conteúdo.
+  pub force: bool,
+  pub layout: OutputLayout,
+  /// Garante as configurações padrão do Obsidian em `.obsidian` (temas, plugins, atalhos).
+  pub obsidian: bool,
+}
+
+impl Default for WriteOptions {
+  fn default() -> Self {
+    Self {
+      force: false,
+      layout: OutputLayout::default(),
+      obsidian: true,
+    }
+  }
 }
 
 /// Arquivos gerados por [`write_book`].
@@ -28,77 +52,90 @@ pub struct WrittenBook {
   pub chapter_files: Vec<PathBuf>,
   /// Imagens copiadas para a pasta `images`.
   pub images: usize,
+  /// O que foi feito em `.obsidian`, quando as configurações estão ligadas.
+  pub obsidian: Option<ConfigReport>,
 }
 
 /// Escreve o livro em `out_dir`.
 ///
-/// Recusa um diretório não vazio, a menos que `force` seja verdadeiro. No formato mdBook, `src/`
-/// é recriado do zero para não sobrarem capítulos antigos; nos formatos plano e completo nada é
-/// apagado (a pasta pode ter outras notas), só os arquivos de mesmo nome são sobrescritos.
+/// Recusa um diretório com conteúdo (fora a pasta `.obsidian`), a menos que `force` seja
+/// verdadeiro. No formato mdBook, `src/` é recriado do zero para não sobrarem capítulos antigos;
+/// nos formatos plano e completo nada é apagado (a pasta pode ter outras notas), só os arquivos
+/// de mesmo nome são sobrescritos. A pasta `.obsidian` nunca é apagada.
 pub fn write_book(
   book: &Book,
   out_dir: &Path,
-  force: bool,
-  layout: OutputLayout,
+  options: &WriteOptions,
 ) -> Result<WrittenBook, Error> {
-  let not_empty = out_dir.exists() && fs::read_dir(out_dir)?.next().is_some();
-  if not_empty && !force {
+  let not_empty = out_dir.exists()
+    && fs::read_dir(out_dir)?
+      .filter_map(Result::ok)
+      .any(|e| e.file_name() != obsidian::CONFIG_DIR);
+  if not_empty && !options.force {
     return Err(Error::OutputNotEmpty(out_dir.to_path_buf()));
   }
-  let chapters_dir = match layout {
-    OutputLayout::MdBook => {
-      let src = out_dir.join("src");
-      if src.exists() {
-        fs::remove_dir_all(&src)?;
-      }
-      fs::create_dir_all(&src)?;
-      fs::write(out_dir.join("book.toml"), book_toml(book))?;
-      src
-    }
-    OutputLayout::Flat => {
-      fs::create_dir_all(out_dir)?;
-      out_dir.to_path_buf()
-    }
-    OutputLayout::Full => {
-      fs::create_dir_all(out_dir)?;
-      let path = out_dir.join(format!("{}.md", slug(&book.title)));
-      let text: Vec<String> = book
-        .chapters
-        .iter()
-        .map(|c| render_chapter_at(c, c.depth))
-        .collect();
-      fs::write(&path, text.join("\n"))?;
-      let images = copy_images(book, &out_dir.join(IMAGES_DIR))?;
-      return Ok(WrittenBook {
-        root: out_dir.to_path_buf(),
-        chapter_files: vec![path],
-        images,
-      });
-    }
+  fs::create_dir_all(out_dir)?;
+
+  let (chapter_files, images) = match options.layout {
+    OutputLayout::MdBook => write_mdbook(book, out_dir)?,
+    OutputLayout::Flat => write_chapters(book, out_dir)?,
+    OutputLayout::Full => write_full(book, out_dir)?,
   };
-
-  let names = chapter_file_names(book);
-  let mut summary = String::from("# Summary\n\n");
-  let mut chapter_files = Vec::with_capacity(names.len());
-  for (chapter, name) in book.chapters.iter().zip(&names) {
-    let indent = "    ".repeat(chapter.depth.saturating_sub(1) as usize);
-    let title = escape_link_text(&chapter.title);
-    writeln!(summary, "{indent}- [{title}](./{name})").unwrap();
-
-    let path = chapters_dir.join(name);
-    fs::write(&path, render_chapter(chapter))?;
-    chapter_files.push(path);
-  }
-  if layout == OutputLayout::MdBook {
-    fs::write(chapters_dir.join("SUMMARY.md"), summary)?;
-  }
-
-  let images = copy_images(book, &chapters_dir.join(IMAGES_DIR))?;
+  let obsidian = options
+    .obsidian
+    .then(|| obsidian::apply(out_dir))
+    .transpose()?;
   Ok(WrittenBook {
     root: out_dir.to_path_buf(),
     chapter_files,
     images,
+    obsidian,
   })
+}
+
+fn write_mdbook(book: &Book, out_dir: &Path) -> Result<(Vec<PathBuf>, usize), Error> {
+  let src = out_dir.join("src");
+  if src.exists() {
+    fs::remove_dir_all(&src)?;
+  }
+  fs::create_dir_all(&src)?;
+  fs::write(out_dir.join("book.toml"), book_toml(book))?;
+  let (files, images) = write_chapters(book, &src)?;
+
+  let mut summary = String::from("# Summary\n\n");
+  for (chapter, path) in book.chapters.iter().zip(&files) {
+    let indent = "    ".repeat(chapter.depth.saturating_sub(1) as usize);
+    let title = escape_link_text(&chapter.title);
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    writeln!(summary, "{indent}- [{title}](./{name})").unwrap();
+  }
+  fs::write(src.join("SUMMARY.md"), summary)?;
+  Ok((files, images))
+}
+
+/// Um `NN-titulo.md` por capítulo e a pasta `images/` em `dir`.
+fn write_chapters(book: &Book, dir: &Path) -> Result<(Vec<PathBuf>, usize), Error> {
+  let mut files = Vec::with_capacity(book.chapters.len());
+  for (chapter, name) in book.chapters.iter().zip(chapter_file_names(book)) {
+    let path = dir.join(name);
+    fs::write(&path, render_chapter(chapter))?;
+    files.push(path);
+  }
+  let images = copy_images(book, &dir.join(IMAGES_DIR))?;
+  Ok((files, images))
+}
+
+/// O livro inteiro em `book.md`; capítulos como títulos no nível da sua profundidade.
+fn write_full(book: &Book, dir: &Path) -> Result<(Vec<PathBuf>, usize), Error> {
+  let path = dir.join(FULL_FILE);
+  let text: Vec<String> = book
+    .chapters
+    .iter()
+    .map(|c| render_chapter_at(c, c.depth))
+    .collect();
+  fs::write(&path, text.join("\n"))?;
+  let images = copy_images(book, &dir.join(IMAGES_DIR))?;
+  Ok((vec![path], images))
 }
 
 /// Copia do diretório de recursos só as imagens que algum capítulo usa.

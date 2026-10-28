@@ -43,14 +43,31 @@ O `md-book` procura a `libpdfium` na variável `MD_BOOK_PDFIUM`, ao lado do exec
 md-book livro.pdf -o meu-livro           # gera o projeto mdBook em ./meu-livro
 md-book livro.pdf -o meu-livro --build   # gera também o HTML em ./meu-livro/book
 md-book livro.pdf -o ~/vault/Livro --flat  # só os capítulos .md e images/, numa pasta (Obsidian)
-md-book livro.pdf -o ~/vault/Livro --full  # o livro inteiro num único .md, mais images/
+md-book livro.pdf -o ~/vault/Livro --full  # o livro inteiro em book.md, mais images/
+md-book --apply-config ~/Livros/A ~/Livros/B  # confere e aplica as configs do Obsidian em pastas existentes
 md-book --help                           # todas as opções
 ```
 
 Com `--flat`, a pasta de saída recebe apenas `NN-capitulo.md` e `images/`, sem `book.toml` nem
-`SUMMARY.md`. Com `--full`, recebe um único `nome-do-livro.md` (capítulos como títulos `#`,
+`SUMMARY.md`. Com `--full`, recebe um único `book.md` (capítulos como títulos `#`,
 seções como `##`...) e `images/`. Nesses dois modos, mesmo com `--force`, nada que já esteja na
 pasta é apagado: só os arquivos de mesmo nome são sobrescritos.
+
+### Configurações do Obsidian
+
+Toda pasta gerada já vem como vault do Obsidian: a pasta `.obsidian` recebe os temas, plugins,
+atalhos, snippets e configurações padrão embutidos no `md-book` (lista e licenças em
+[TERCEIROS.md](TERCEIROS.md)). Se a pasta já existe, o que falta é criado e o que difere do
+padrão é restaurado; arquivos extras (outros plugins, abas abertas) nunca são apagados, e uma
+pasta que só tem o `.obsidian` não exige `--force`.
+
+- `--no-config`: não mexe no `.obsidian` (por exemplo, ao gerar dentro de um vault existente,
+  para não criar um vault dentro de outro).
+- `--apply-config <pastas>`: só confere e aplica as configurações, sem converter PDF; serve para
+  livros gerados antes ou vaults que perderam alguma configuração. Não combina com as opções de
+  conversão.
+- Para mudar o padrão: ajuste o vault de referência, rode `scripts/atualizar-obsidian.sh` e
+  recompile.
 
 Sem instalar, rode direto do repositório: `cargo run --release -- livro.pdf -o meu-livro`.
 

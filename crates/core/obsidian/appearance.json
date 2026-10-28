@@ -1,0 +1,9 @@
+{
+  "cssTheme": "Obsidian gruvbox",
+  "showViewHeader": false,
+  "showRibbon": false,
+  "accentColor": "#cba6f7",
+  "enabledCssSnippets": [
+    "colunas"
+  ]
+}
