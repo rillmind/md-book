@@ -11,7 +11,18 @@ use crate::text::ListKind;
 pub const IMAGES_DIR: &str = "images";
 
 pub fn render_chapter(chapter: &Chapter) -> String {
-  let mut out = format!("# {}\n\n", escape_heading(&chapter.title));
+  render_chapter_at(chapter, 1)
+}
+
+/// Renderiza o capítulo com o título no nível `base` (`#` = 1); os subtítulos descem junto.
+/// O livro inteiro num arquivo só usa `base` = profundidade do capítulo.
+pub fn render_chapter_at(chapter: &Chapter, base: u8) -> String {
+  let base = base.clamp(1, 5);
+  let mut out = format!(
+    "{} {}\n\n",
+    "#".repeat(base as usize),
+    escape_heading(&chapter.title)
+  );
   let mut in_list = false;
   let mut notes = Vec::new();
   for block in &chapter.blocks {
@@ -37,7 +48,7 @@ pub fn render_chapter(chapter: &Chapter) -> String {
         ));
       }
       Block::Heading { level, text } => {
-        let hashes = (level.saturating_sub(chapter.depth) + 1).clamp(2, 6) as usize;
+        let hashes = (level.saturating_sub(chapter.depth) + base).clamp(base + 1, 6) as usize;
         out.push_str(&format!(
           "{} {}\n\n",
           "#".repeat(hashes),
@@ -350,6 +361,19 @@ mod tests {
       render_chapter(&c),
       "# Capítulo 1\n\nTexto com \\*asterisco\\*.\n\n## Seção\n\n1. um\n    - sub\n- a) letra\n\nFim.\n"
     );
+  }
+
+  #[test]
+  fn chapter_can_start_at_a_deeper_heading_level() {
+    let c = Chapter {
+      title: "Cap 1".into(),
+      depth: 2,
+      blocks: vec![Block::Heading {
+        level: 3,
+        text: "Seção".into(),
+      }],
+    };
+    assert_eq!(render_chapter_at(&c, 2), "## Cap 1\n\n### Seção\n");
   }
 
   #[test]

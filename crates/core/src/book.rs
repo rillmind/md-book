@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::markdown::{IMAGES_DIR, escape_link_text, render_chapter};
+use crate::markdown::{IMAGES_DIR, escape_link_text, render_chapter, render_chapter_at};
 use crate::structure::Block;
 use crate::{Book, Error};
 
@@ -17,6 +17,8 @@ pub enum OutputLayout {
   /// Só os capítulos `.md` e a pasta `images/`, direto no diretório de saída (ex.: dentro de um
   /// vault do Obsidian).
   Flat,
+  /// O livro inteiro num único `.md` (com o nome do livro) e a pasta `images/`.
+  Full,
 }
 
 /// Arquivos gerados por [`write_book`].
@@ -31,8 +33,8 @@ pub struct WrittenBook {
 /// Escreve o livro em `out_dir`.
 ///
 /// Recusa um diretório não vazio, a menos que `force` seja verdadeiro. No formato mdBook, `src/`
-/// é recriado do zero para não sobrarem capítulos antigos; no formato plano nada é apagado (a
-/// pasta pode ter outras notas), só os arquivos de mesmo nome são sobrescritos.
+/// é recriado do zero para não sobrarem capítulos antigos; nos formatos plano e completo nada é
+/// apagado (a pasta pode ter outras notas), só os arquivos de mesmo nome são sobrescritos.
 pub fn write_book(
   book: &Book,
   out_dir: &Path,
@@ -56,6 +58,22 @@ pub fn write_book(
     OutputLayout::Flat => {
       fs::create_dir_all(out_dir)?;
       out_dir.to_path_buf()
+    }
+    OutputLayout::Full => {
+      fs::create_dir_all(out_dir)?;
+      let path = out_dir.join(format!("{}.md", slug(&book.title)));
+      let text: Vec<String> = book
+        .chapters
+        .iter()
+        .map(|c| render_chapter_at(c, c.depth))
+        .collect();
+      fs::write(&path, text.join("\n"))?;
+      let images = copy_images(book, &out_dir.join(IMAGES_DIR))?;
+      return Ok(WrittenBook {
+        root: out_dir.to_path_buf(),
+        chapter_files: vec![path],
+        images,
+      });
     }
   };
 

@@ -202,3 +202,29 @@ fn flat_layout_writes_only_chapters_and_images() {
 
   std::fs::remove_dir_all(&out).unwrap();
 }
+
+#[test]
+fn full_layout_writes_the_whole_book_in_one_file() {
+  let book = convert("outline-completo.pdf");
+  let out = std::env::temp_dir().join(format!("mdbook-gen-full-{}", std::process::id()));
+  let _ = std::fs::remove_dir_all(&out);
+
+  let written = write_book(&book, &out, false, OutputLayout::Full).unwrap();
+  assert_eq!(written.chapter_files, [out.join("guia-de-teste.md")]);
+  let entries: Vec<_> = std::fs::read_dir(&out).unwrap().collect();
+  assert_eq!(entries.len(), 1, "só o .md (o fixture não tem imagens)");
+
+  let text = std::fs::read_to_string(&written.chapter_files[0]).unwrap();
+  let headings: Vec<&str> = text.lines().filter(|l| l.starts_with('#')).collect();
+  assert_eq!(
+    &headings[..4],
+    [
+      "# Início",
+      "# 1 Introdução",
+      "## 1.1 Primeiros passos",
+      "## 1.2 Detalhes"
+    ]
+  );
+  assert!(headings.contains(&"# 3 Uso Avançado"));
+  std::fs::remove_dir_all(&out).unwrap();
+}

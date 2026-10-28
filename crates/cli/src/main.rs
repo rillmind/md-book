@@ -47,8 +47,13 @@ struct Cli {
   /// Só os capítulos .md e a pasta images/, direto no diretório de saída, sem book.toml nem
   /// SUMMARY.md (ex.: para uma pasta do Obsidian). Com --force, nada é apagado: só os arquivos
   /// de mesmo nome são sobrescritos.
-  #[arg(long, conflicts_with = "build")]
+  #[arg(long, conflicts_with_all = ["build", "full"])]
   flat: bool,
+
+  /// O livro inteiro num único arquivo .md (com o nome do livro), mais a pasta images/, no
+  /// diretório de saída. Com --force, só sobrescreve esse arquivo e as imagens.
+  #[arg(long, conflicts_with = "build")]
+  full: bool,
 }
 
 fn main() -> Result<()> {
@@ -87,10 +92,10 @@ fn main() -> Result<()> {
   bar.finish_and_clear();
   let book = book?;
 
-  let layout = if cli.flat {
-    OutputLayout::Flat
-  } else {
-    OutputLayout::MdBook
+  let layout = match (cli.flat, cli.full) {
+    (true, _) => OutputLayout::Flat,
+    (_, true) => OutputLayout::Full,
+    _ => OutputLayout::MdBook,
   };
   let written = mdbook_gen_core::write_book(&book, &output, cli.force, layout)?;
 
@@ -99,11 +104,15 @@ fn main() -> Result<()> {
     HeadingSource::FontSize => "tamanho da fonte",
     HeadingSource::None => "nenhum título detectado",
   };
+  // No modo --full o destino é o arquivo único; nos outros, o diretório.
+  let destination = match layout {
+    OutputLayout::Full => written.chapter_files[0].display(),
+    _ => written.root.display(),
+  };
   println!(
-    "{} capítulo(s) e {} imagem(ns) em {} (títulos: {source})",
-    written.chapter_files.len(),
+    "{} capítulo(s) e {} imagem(ns) em {destination} (títulos: {source})",
+    book.chapters.len(),
     written.images,
-    written.root.display()
   );
   if book.outline_ignored {
     eprintln!("aviso: os bookmarks do PDF estavam incompletos e foram ignorados");
