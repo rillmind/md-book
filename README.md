@@ -42,8 +42,13 @@ O `md-book` procura a `libpdfium` na variável `MD_BOOK_PDFIUM`, ao lado do exec
 ```sh
 md-book livro.pdf -o meu-livro           # gera o projeto mdBook em ./meu-livro
 md-book livro.pdf -o meu-livro --build   # gera também o HTML em ./meu-livro/book
+md-book livro.pdf -o ~/vault/Livro --flat  # só os capítulos .md e images/, numa pasta (Obsidian)
 md-book --help                           # todas as opções
 ```
+
+Com `--flat`, a pasta de saída recebe apenas `NN-capitulo.md` e `images/`, sem `book.toml` nem
+`SUMMARY.md`. Mesmo com `--force`, nada que já esteja na pasta é apagado: só os arquivos de
+mesmo nome são sobrescritos.
 
 Sem instalar, rode direto do repositório: `cargo run --release -- livro.pdf -o meu-livro`.
 

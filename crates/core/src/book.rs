@@ -1,4 +1,4 @@
-//! Escrita do projeto mdBook em disco.
+//! Escrita do livro em disco: projeto mdBook (padrão) ou só os capítulos numa pasta.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -8,31 +8,56 @@ use crate::markdown::{IMAGES_DIR, escape_link_text, render_chapter};
 use crate::structure::Block;
 use crate::{Book, Error};
 
+/// Formato da saída.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OutputLayout {
+  /// Projeto mdBook: `book.toml`, `src/SUMMARY.md`, capítulos e imagens em `src/`.
+  #[default]
+  MdBook,
+  /// Só os capítulos `.md` e a pasta `images/`, direto no diretório de saída (ex.: dentro de um
+  /// vault do Obsidian).
+  Flat,
+}
+
 /// Arquivos gerados por [`write_book`].
 #[derive(Debug, Clone)]
 pub struct WrittenBook {
   pub root: PathBuf,
   pub chapter_files: Vec<PathBuf>,
-  /// Imagens copiadas para `src/images`.
+  /// Imagens copiadas para a pasta `images`.
   pub images: usize,
 }
 
-/// Escreve `book.toml`, `src/SUMMARY.md`, um arquivo por capítulo e as imagens em `out_dir`.
+/// Escreve o livro em `out_dir`.
 ///
-/// Recusa um diretório não vazio, a menos que `force` seja verdadeiro; nesse caso
-/// `src/` é recriado do zero para não sobrarem capítulos antigos.
-pub fn write_book(book: &Book, out_dir: &Path, force: bool) -> Result<WrittenBook, Error> {
+/// Recusa um diretório não vazio, a menos que `force` seja verdadeiro. No formato mdBook, `src/`
+/// é recriado do zero para não sobrarem capítulos antigos; no formato plano nada é apagado (a
+/// pasta pode ter outras notas), só os arquivos de mesmo nome são sobrescritos.
+pub fn write_book(
+  book: &Book,
+  out_dir: &Path,
+  force: bool,
+  layout: OutputLayout,
+) -> Result<WrittenBook, Error> {
   let not_empty = out_dir.exists() && fs::read_dir(out_dir)?.next().is_some();
   if not_empty && !force {
     return Err(Error::OutputNotEmpty(out_dir.to_path_buf()));
   }
-  let src = out_dir.join("src");
-  if src.exists() {
-    fs::remove_dir_all(&src)?;
-  }
-  fs::create_dir_all(&src)?;
-
-  fs::write(out_dir.join("book.toml"), book_toml(book))?;
+  let chapters_dir = match layout {
+    OutputLayout::MdBook => {
+      let src = out_dir.join("src");
+      if src.exists() {
+        fs::remove_dir_all(&src)?;
+      }
+      fs::create_dir_all(&src)?;
+      fs::write(out_dir.join("book.toml"), book_toml(book))?;
+      src
+    }
+    OutputLayout::Flat => {
+      fs::create_dir_all(out_dir)?;
+      out_dir.to_path_buf()
+    }
+  };
 
   let names = chapter_file_names(book);
   let mut summary = String::from("# Summary\n\n");
@@ -42,13 +67,15 @@ pub fn write_book(book: &Book, out_dir: &Path, force: bool) -> Result<WrittenBoo
     let title = escape_link_text(&chapter.title);
     writeln!(summary, "{indent}- [{title}](./{name})").unwrap();
 
-    let path = src.join(name);
+    let path = chapters_dir.join(name);
     fs::write(&path, render_chapter(chapter))?;
     chapter_files.push(path);
   }
-  fs::write(src.join("SUMMARY.md"), summary)?;
+  if layout == OutputLayout::MdBook {
+    fs::write(chapters_dir.join("SUMMARY.md"), summary)?;
+  }
 
-  let images = copy_images(book, &src.join(IMAGES_DIR))?;
+  let images = copy_images(book, &chapters_dir.join(IMAGES_DIR))?;
   Ok(WrittenBook {
     root: out_dir.to_path_buf(),
     chapter_files,

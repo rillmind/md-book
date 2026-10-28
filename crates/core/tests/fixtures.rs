@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use mdbook_gen_core::{Block, Book, HeadingSource, Options, analyze, write_book};
+use mdbook_gen_core::{Block, Book, HeadingSource, Options, OutputLayout, analyze, write_book};
 
 const CHAPTERS: [&str; 3] = [
   "1 Introdução",
@@ -84,7 +84,7 @@ fn writes_mdbook_project() {
   let out = std::env::temp_dir().join(format!("mdbook-gen-test-{}", std::process::id()));
   let _ = std::fs::remove_dir_all(&out);
 
-  let written = write_book(&book, &out, false).unwrap();
+  let written = write_book(&book, &out, false, OutputLayout::MdBook).unwrap();
   assert_eq!(written.chapter_files.len(), 4);
   let summary = std::fs::read_to_string(out.join("src/SUMMARY.md")).unwrap();
   assert!(summary.contains("- [1 Introdução](./02-1-introducao.md)"));
@@ -92,8 +92,8 @@ fn writes_mdbook_project() {
   assert!(toml.contains("title = \"Guia de Teste\""));
 
   // Diretório não vazio só é sobrescrito com force.
-  assert!(write_book(&book, &out, false).is_err());
-  write_book(&book, &out, true).unwrap();
+  assert!(write_book(&book, &out, false, OutputLayout::MdBook).is_err());
+  write_book(&book, &out, true, OutputLayout::MdBook).unwrap();
 
   std::fs::remove_dir_all(&out).unwrap();
 }
@@ -133,7 +133,7 @@ fn extracts_photo_and_vector_figure_with_captions() {
 
   let out = std::env::temp_dir().join(format!("mdbook-gen-fig-{}", std::process::id()));
   let _ = std::fs::remove_dir_all(&out);
-  let written = write_book(&book, &out, false).unwrap();
+  let written = write_book(&book, &out, false, OutputLayout::MdBook).unwrap();
   assert_eq!(written.images, 2);
   assert_eq!(
     std::fs::read_dir(out.join("src/images")).unwrap().count(),
@@ -176,4 +176,29 @@ fn converts_bordered_table() {
       ["rm", "Remove arquivos"],
     ]
   );
+}
+
+#[test]
+fn flat_layout_writes_only_chapters_and_images() {
+  let book = convert("figuras.pdf");
+  let out = std::env::temp_dir().join(format!("mdbook-gen-flat-{}", std::process::id()));
+  let _ = std::fs::remove_dir_all(&out);
+  std::fs::create_dir_all(&out).unwrap();
+  // Uma nota que já existia na pasta (ex.: vault do Obsidian) não pode ser apagada.
+  std::fs::write(out.join("minha-nota.md"), "não apagar").unwrap();
+
+  assert!(write_book(&book, &out, false, OutputLayout::Flat).is_err());
+  let written = write_book(&book, &out, true, OutputLayout::Flat).unwrap();
+  assert!(!out.join("book.toml").exists() && !out.join("src").exists());
+  assert!(!out.join("SUMMARY.md").exists());
+  assert_eq!(written.images, 2);
+  assert_eq!(std::fs::read_dir(out.join("images")).unwrap().count(), 2);
+  let chapter = std::fs::read_to_string(&written.chapter_files[0]).unwrap();
+  assert!(chapter.contains("](images/"));
+  assert_eq!(
+    std::fs::read_to_string(out.join("minha-nota.md")).unwrap(),
+    "não apagar"
+  );
+
+  std::fs::remove_dir_all(&out).unwrap();
 }

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
-use mdbook_gen_core::{HeadingSource, Options, Progress};
+use mdbook_gen_core::{HeadingSource, Options, OutputLayout, Progress};
 
 /// Gera um livro mdBook (book.toml + src/SUMMARY.md + um .md por capítulo) a partir de um PDF de texto.
 #[derive(Parser)]
@@ -43,6 +43,12 @@ struct Cli {
   /// Também compila o livro em HTML (requer a feature `build`).
   #[arg(long)]
   build: bool,
+
+  /// Só os capítulos .md e a pasta images/, direto no diretório de saída, sem book.toml nem
+  /// SUMMARY.md (ex.: para uma pasta do Obsidian). Com --force, nada é apagado: só os arquivos
+  /// de mesmo nome são sobrescritos.
+  #[arg(long, conflicts_with = "build")]
+  flat: bool,
 }
 
 fn main() -> Result<()> {
@@ -81,7 +87,12 @@ fn main() -> Result<()> {
   bar.finish_and_clear();
   let book = book?;
 
-  let written = mdbook_gen_core::write_book(&book, &output, cli.force)?;
+  let layout = if cli.flat {
+    OutputLayout::Flat
+  } else {
+    OutputLayout::MdBook
+  };
+  let written = mdbook_gen_core::write_book(&book, &output, cli.force, layout)?;
 
   let source = match book.heading_source {
     HeadingSource::Outline => "bookmarks do PDF",

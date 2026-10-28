@@ -19,7 +19,7 @@ mod text;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub use book::{WrittenBook, write_book};
+pub use book::{OutputLayout, WrittenBook, write_book};
 pub use markdown::render_chapter;
 pub use model::Style;
 pub use pdfium::PDFIUM_ENV;
