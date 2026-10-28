@@ -85,11 +85,15 @@ perdem o fundo branco; no claro ficam como estão.
                     # plugins e plugins/temas que não estão na comunidade
   ```
 
-  Plugins e temas da comunidade são baixados do GitHub na primeira vez que forem usados e
-  guardados em `~/.cache/md-book`. Para trocar um plugin: troque no vault, rode
+  Na primeira conversão, se ainda não houver `~/.config/md-book/config.toml`, o `md-book` o cria
+  com o padrão embutido; depois disso, é ele que vale (edite à vontade ou substitua com
+  `--save-config`). Plugins e temas da comunidade são baixados do GitHub na primeira vez que forem
+  usados e guardados em `~/.cache/md-book`; sem internet, as cópias embutidas são usadas quando
+  a versão é a mesma. Para trocar um plugin: troque no vault, rode
   `md-book --save-config` nele e, se quiser atualizar livros já gerados, `md-book --apply-config
   <pastas>`. Para voltar ao padrão embutido, apague `~/.config/md-book`.
-- Padrão embutido: vem do vault de referência via `scripts/atualizar-obsidian.sh` (e recompilar).
+- Padrão embutido: vem do vault de referência via `scripts/atualizar-obsidian.sh` (arquivos e
+  `config.toml` padrão; depois recompile). Para voltar a ele, apague `~/.config/md-book`.
 
 Sem instalar, rode direto do repositório: `cargo run --release -- livro.pdf -o meu-livro`.
 

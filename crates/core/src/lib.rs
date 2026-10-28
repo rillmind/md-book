@@ -22,7 +22,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub use book::{FULL_FILE, OutputLayout, WriteOptions, WrittenBook, write_book};
-pub use config::{CACHE_ENV, CONFIG_ENV, SaveReport, config_dir, save as save_config};
+pub use config::{
+  CACHE_ENV, CONFIG_ENV, SaveReport, config_dir, ensure_default as ensure_default_config,
+  save as save_config,
+};
 pub use markdown::render_chapter;
 pub use model::Style;
 pub use obsidian::{

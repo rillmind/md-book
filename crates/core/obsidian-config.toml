@@ -1,0 +1,28 @@
+# config.toml padrão embutido no md-book (gerado por scripts/atualizar-obsidian.sh).
+[[plugin]]
+id = "image-darkmodifier"
+repo = "0qln/obsidian-image-darkmodifier"
+version = "1.2.0"
+
+[[plugin]]
+id = "obsidian-hyphenation"
+repo = "7596ff/obsidian-hyphenation"
+version = "0.1.0"
+
+[[plugin]]
+id = "vimakase"
+repo = "jelenv/obsidian-vimakase"
+version = "0.3.2"
+
+[[plugin]]
+id = "vimium-plus"
+repo = "stianlyng/obsidian-vimium-plus"
+version = "0.3.0"
+
+[[theme]]
+name = "Material Gruvbox"
+repo = "alljavi/material_gruvbox_obsidian"
+
+[[theme]]
+name = "Obsidian gruvbox"
+repo = "insanum/obsidian_gruvbox"

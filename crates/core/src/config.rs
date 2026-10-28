@@ -21,6 +21,8 @@ pub const CONFIG_ENV: &str = "MD_BOOK_CONFIG";
 pub const CACHE_ENV: &str = "MD_BOOK_CACHE";
 
 const CONFIG_FILE: &str = "config.toml";
+/// `config.toml` do padrão embutido (gerado por `scripts/atualizar-obsidian.sh`).
+const DEFAULT_CONFIG: &str = include_str!("../obsidian-config.toml");
 const FILES_DIR: &str = "obsidian";
 const PLUGIN_CATALOG: &str =
   "https://raw.githubusercontent.com/obsidianmd/obsidian-releases/master/community-plugins.json";
@@ -96,19 +98,107 @@ pub fn user_files(dir: &Path, config: &UserConfig) -> Result<Vec<(PathBuf, Vec<u
       files.insert(relative, fs::read(&path)?);
     }
   }
+  // Sem rede (ou com o GitHub fora do ar), a cópia embutida serve se for a mesma versão.
   for plugin in &config.plugins {
-    for (name, bytes) in fetch_plugin(plugin)? {
+    let fetched = fetch_plugin(plugin).or_else(|e| embedded_plugin(plugin).ok_or(e))?;
+    for (name, bytes) in fetched {
       files.insert(Path::new("plugins").join(&plugin.id).join(name), bytes);
     }
   }
   for theme in &config.themes {
-    for (name, bytes) in fetch_theme(theme)? {
+    let fetched = fetch_theme(theme).or_else(|e| embedded_theme(theme).ok_or(e))?;
+    for (name, bytes) in fetched {
       files.insert(Path::new("themes").join(&theme.name).join(name), bytes);
     }
   }
   let mut out: Vec<(PathBuf, Vec<u8>)> = files.into_iter().collect();
   out.sort();
   Ok(out)
+}
+
+/// Cria a configuração do usuário em `dir` com o padrão embutido, se ainda não houver
+/// `config.toml`. Devolve se criou.
+pub fn ensure_default(dir: &Path) -> Result<bool, Error> {
+  if dir.join(CONFIG_FILE).is_file() {
+    return Ok(false);
+  }
+  let config = default_config()?;
+  let files_dir = dir.join(FILES_DIR);
+  for (relative, bytes) in crate::obsidian::embedded() {
+    if is_referenced(&config, &relative) {
+      continue;
+    }
+    let path = files_dir.join(&relative);
+    if let Some(parent) = path.parent() {
+      fs::create_dir_all(parent)?;
+    }
+    fs::write(path, bytes)?;
+  }
+  let header = "# Padrão do Obsidian para os livros gerados pelo md-book.\n\
+                # Criado com o padrão embutido; para registrar o seu: `md-book --save-config <vault>`.\n\
+                # Plugins e temas abaixo são baixados da comunidade; o resto está em obsidian/.\n\n";
+  let body = DEFAULT_CONFIG
+    .lines()
+    .skip_while(|l| l.starts_with('#'))
+    .collect::<Vec<_>>()
+    .join("\n");
+  fs::create_dir_all(dir)?;
+  fs::write(dir.join(CONFIG_FILE), format!("{header}{}\n", body.trim()))?;
+  Ok(true)
+}
+
+fn default_config() -> Result<UserConfig, Error> {
+  toml::from_str(DEFAULT_CONFIG).map_err(|e| Error::Config(format!("padrão embutido: {e}")))
+}
+
+/// O arquivo do padrão embutido vem da comunidade (não precisa ser guardado em `obsidian/`).
+/// As configurações de cada plugin (`data.json`) são do usuário e ficam.
+fn is_referenced(config: &UserConfig, relative: &Path) -> bool {
+  let parts: Vec<String> = relative
+    .components()
+    .map(|c| c.as_os_str().to_string_lossy().into_owned())
+    .collect();
+  match parts.as_slice() {
+    [kind, id, name] if kind == "plugins" => {
+      name != "data.json" && config.plugins.iter().any(|p| &p.id == id)
+    }
+    [kind, theme, _] if kind == "themes" => config.themes.iter().any(|t| &t.name == theme),
+    _ => false,
+  }
+}
+
+/// Arquivos do plugin na cópia embutida, se ela for da mesma versão.
+fn embedded_plugin(plugin: &PluginRef) -> Option<Vec<(String, Vec<u8>)>> {
+  let files = embedded_dir(&Path::new("plugins").join(&plugin.id));
+  let manifest = files.iter().find(|(n, _)| n == "manifest.json")?;
+  let version = serde_json::from_slice::<serde_json::Value>(&manifest.1).ok()?["version"]
+    .as_str()?
+    .to_string();
+  (version == plugin.version).then(|| {
+    files
+      .into_iter()
+      .filter(|(n, _)| n != "data.json")
+      .collect()
+  })
+}
+
+fn embedded_theme(theme: &ThemeRef) -> Option<Vec<(String, Vec<u8>)>> {
+  let files = embedded_dir(&Path::new("themes").join(&theme.name));
+  (!files.is_empty()).then_some(files)
+}
+
+/// Arquivos embutidos diretamente em `dir` (relativo a `.obsidian`), por nome.
+fn embedded_dir(dir: &Path) -> Vec<(String, Vec<u8>)> {
+  crate::obsidian::embedded()
+    .into_iter()
+    .filter(|(path, _)| path.parent() == Some(dir))
+    .filter_map(|(path, bytes)| {
+      Some((
+        path.file_name()?.to_string_lossy().into_owned(),
+        bytes.to_vec(),
+      ))
+    })
+    .collect()
 }
 
 /// O que foi registrado por [`save`].
@@ -439,6 +529,55 @@ mod tests {
       ]
     );
     fs::remove_dir_all(&dir).unwrap();
+  }
+
+  #[test]
+  fn default_config_is_created_once_with_only_local_files() {
+    let dir = std::env::temp_dir().join(format!("md-book-default-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    assert!(ensure_default(&dir).unwrap());
+    assert!(!ensure_default(&dir).unwrap(), "não recria se já existe");
+
+    let config = load(&dir).unwrap().expect("config.toml");
+    assert!(config.plugins.iter().any(|p| p.id == "vimium-plus"));
+    let stored = walk(&dir.join(FILES_DIR)).unwrap();
+    let has = |rel: &str| stored.iter().any(|p| p.ends_with(rel));
+    assert!(has("hotkeys.json") && has("plugins/colunas-fixas/main.js"));
+    assert!(has("plugins/image-darkmodifier/data.json"));
+    assert!(
+      !has("plugins/vimium-plus/main.js"),
+      "plugins da comunidade não são guardados"
+    );
+
+    // O usuário edita o config.toml: a edição é preservada.
+    fs::write(dir.join(CONFIG_FILE), "# meu\n").unwrap();
+    assert!(!ensure_default(&dir).unwrap());
+    assert_eq!(
+      fs::read_to_string(dir.join(CONFIG_FILE)).unwrap(),
+      "# meu\n"
+    );
+    fs::remove_dir_all(&dir).unwrap();
+  }
+
+  #[test]
+  fn embedded_copies_cover_the_default_plugins_offline() {
+    let config = default_config().unwrap();
+    for plugin in &config.plugins {
+      let files =
+        embedded_plugin(plugin).unwrap_or_else(|| panic!("{} sem cópia embutida", plugin.id));
+      assert!(files.iter().any(|(n, _)| n == "main.js"));
+    }
+    for theme in &config.themes {
+      assert!(embedded_theme(theme).is_some(), "{}", theme.name);
+    }
+    let other = PluginRef {
+      version: "999".into(),
+      ..config.plugins[0].clone()
+    };
+    assert!(
+      embedded_plugin(&other).is_none(),
+      "versão diferente não usa a cópia embutida"
+    );
   }
 
   #[test]

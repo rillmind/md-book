@@ -139,7 +139,7 @@ pub fn apply(dir: &Path, template: &Template) -> Result<ConfigReport, Error> {
 }
 
 /// Arquivos do padrão embutido, com caminho relativo a `.obsidian`.
-fn embedded() -> Vec<(PathBuf, &'static [u8])> {
+pub(crate) fn embedded() -> Vec<(PathBuf, &'static [u8])> {
   fn walk(dir: &'static Dir<'static>, out: &mut Vec<(PathBuf, &'static [u8])>) {
     for entry in dir.entries() {
       match entry {

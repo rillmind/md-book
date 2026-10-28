@@ -151,7 +151,11 @@ fn main() -> Result<()> {
   let write = WriteOptions {
     force: cli.force,
     layout,
-    obsidian: (!cli.no_config).then(Template::detect),
+    obsidian: if cli.no_config {
+      None
+    } else {
+      Some(template()?)
+    },
   };
   let written = mdbook_gen_core::write_book(&book, &output, &write)?;
 
@@ -232,6 +236,22 @@ fn save_config(vault: &Path) -> Result<()> {
   Ok(())
 }
 
+/// Confere se há `config.toml` do usuário (criando-o com o padrão embutido na primeira vez) e
+/// devolve o padrão a usar.
+fn template() -> Result<Template> {
+  if let Some(dir) = mdbook_gen_core::config_dir() {
+    let created = mdbook_gen_core::ensure_default_config(&dir)
+      .with_context(|| format!("falha ao criar a configuração em {}", dir.display()))?;
+    if created {
+      println!(
+        "criado {} com o padrão embutido (edite-o ou registre o seu com --save-config)",
+        dir.join("config.toml").display()
+      );
+    }
+  }
+  Ok(Template::detect())
+}
+
 fn template_name(template: &Template) -> String {
   match template {
     Template::Embedded => "padrão embutido".to_string(),
@@ -241,7 +261,7 @@ fn template_name(template: &Template) -> String {
 
 /// Confere e aplica as configurações do Obsidian em cada pasta; falha se alguma não existir.
 fn apply_config(dirs: &[PathBuf]) -> Result<()> {
-  let template = Template::detect();
+  let template = template()?;
   println!("usando o {}", template_name(&template));
   let mut failed = false;
   for dir in dirs {
