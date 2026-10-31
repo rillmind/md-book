@@ -1,0 +1,47 @@
+/* Cada "tela" tem N colunas da altura do painel; o texto enche a da
+   esquerda, depois as seguintes, e continua na tela de baixo.
+   As variáveis --colunas-fixas-* vêm das configurações do plugin. */
+.colunas-fixas .markdown-reading-view {
+  --colunas-margem: var(--colunas-fixas-margem, 2rem);
+}
+
+.colunas-fixas .markdown-reading-view .markdown-preview-view {
+  container-type: size;
+  padding-block: var(--colunas-margem);
+}
+
+.colunas-fixas .markdown-reading-view .markdown-preview-sizer {
+  --colunas-altura: calc(100cqh - 2 * var(--colunas-margem));
+  column-count: var(--colunas-fixas-quantidade, 2);
+  column-gap: var(--colunas-fixas-espaco, 3rem);
+  column-height: var(--colunas-altura);
+  column-wrap: wrap;
+  /* com esse espaçamento, cada tela começa exatamente uma altura de painel abaixo da anterior */
+  row-gap: calc(2 * var(--colunas-margem));
+  max-width: none !important;
+  /* o Obsidian soma alturas de trechos medidas como se fossem uma coluna só,
+     o que gera espaço vazio no fim; como o plugin desenha a nota inteira, não é preciso */
+  min-height: 0 !important;
+}
+
+.colunas-fixas .markdown-reading-view .markdown-preview-pusher {
+  margin-bottom: 0 !important;
+}
+
+.colunas-fixas .markdown-reading-view h1,
+.colunas-fixas .markdown-reading-view h2,
+.colunas-fixas .markdown-reading-view h3 {
+  break-after: avoid;
+}
+
+.colunas-fixas .markdown-reading-view pre,
+.colunas-fixas .markdown-reading-view img,
+.colunas-fixas .markdown-reading-view table {
+  break-inside: avoid;
+}
+
+/* figura maior que a coluna seria cortada */
+.colunas-fixas .markdown-reading-view img {
+  max-height: calc(100cqh - 2 * var(--colunas-margem));
+  object-fit: contain;
+}

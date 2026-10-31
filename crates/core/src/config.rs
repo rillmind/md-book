@@ -174,10 +174,16 @@ fn embedded_plugin(plugin: &PluginRef) -> Option<Vec<(String, Vec<u8>)>> {
   let version = serde_json::from_slice::<serde_json::Value>(&manifest.1).ok()?["version"]
     .as_str()?
     .to_string();
+  // Um plugin copiado à mão para o vault (sem o instalador do Obsidian) vem sem o ajuste do
+  // `main.js`; aplicá-lo deixa a cópia igual à baixada.
   (version == plugin.version).then(|| {
     files
       .into_iter()
       .filter(|(n, _)| n != "data.json")
+      .map(|(n, bytes)| match n.as_str() {
+        "main.js" => (n, as_installed(&bytes)),
+        _ => (n, bytes),
+      })
       .collect()
   })
 }
@@ -381,9 +387,14 @@ fn fetch_plugin(plugin: &PluginRef) -> Result<Vec<(String, Vec<u8>)>, Error> {
 
 /// O `main.js` como o Obsidian o grava ao instalar o plugin: sem o source map embutido e com
 /// `/* nosourcemap */` no fim. Assim o arquivo fica idêntico ao de um vault onde o próprio
-/// Obsidian instalou o plugin (e o `--apply-config` não acusa diferença).
+/// Obsidian instalou o plugin (e o `--apply-config` não acusa diferença). Um arquivo já ajustado
+/// fica como está.
 fn as_installed(main_js: &[u8]) -> Vec<u8> {
   const MAP: &[u8] = b"//# sourceMappingURL=";
+  const MARK: &[u8] = b"\n\n/* nosourcemap */";
+  if main_js.ends_with(MARK) {
+    return main_js.to_vec();
+  }
   let code = match main_js.windows(MAP.len()).rposition(|w| w == MAP) {
     Some(at) => &main_js[..at],
     None => {
@@ -394,7 +405,7 @@ fn as_installed(main_js: &[u8]) -> Vec<u8> {
       &main_js[..end]
     }
   };
-  [code, b"\n\n/* nosourcemap */"].concat()
+  [code, MARK].concat()
 }
 
 fn fetch_theme(theme: &ThemeRef) -> Result<Vec<(String, Vec<u8>)>, Error> {
@@ -510,9 +521,9 @@ mod tests {
   fn local_files_need_no_network() {
     let dir = std::env::temp_dir().join(format!("md-book-config-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(dir.join("obsidian/plugins/colunas-fixas")).unwrap();
+    fs::create_dir_all(dir.join("obsidian/plugins/meu-plugin")).unwrap();
     fs::write(dir.join("obsidian/app.json"), "{}").unwrap();
-    fs::write(dir.join("obsidian/plugins/colunas-fixas/main.js"), "//").unwrap();
+    fs::write(dir.join("obsidian/plugins/meu-plugin/main.js"), "//").unwrap();
     fs::write(dir.join("config.toml"), "# só arquivos locais\n").unwrap();
 
     let config = load(&dir).unwrap().expect("config.toml");
@@ -525,7 +536,7 @@ mod tests {
       names,
       [
         PathBuf::from("app.json"),
-        PathBuf::from("plugins/colunas-fixas/main.js")
+        PathBuf::from("plugins/meu-plugin/main.js")
       ]
     );
     fs::remove_dir_all(&dir).unwrap();
@@ -542,10 +553,10 @@ mod tests {
     assert!(config.plugins.iter().any(|p| p.id == "vimium-plus"));
     let stored = walk(&dir.join(FILES_DIR)).unwrap();
     let has = |rel: &str| stored.iter().any(|p| p.ends_with(rel));
-    assert!(has("hotkeys.json") && has("plugins/colunas-fixas/main.js"));
+    assert!(has("hotkeys.json") && has("plugins/colunas-fixas/data.json"));
     assert!(has("plugins/image-darkmodifier/data.json"));
     assert!(
-      !has("plugins/vimium-plus/main.js"),
+      !has("plugins/vimium-plus/main.js") && !has("plugins/colunas-fixas/main.js"),
       "plugins da comunidade não são guardados"
     );
 
@@ -587,6 +598,8 @@ mod tests {
       as_installed(b"code();\n//# sourceMappingURL=data:abc\n"),
       b"code();\n\n\n/* nosourcemap */"
     );
+    let installed = as_installed(b"code();\n");
+    assert_eq!(as_installed(&installed), installed, "não ajusta duas vezes");
   }
 
   #[test]

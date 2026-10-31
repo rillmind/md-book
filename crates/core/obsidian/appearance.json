@@ -3,7 +3,5 @@
   "showViewHeader": false,
   "showRibbon": false,
   "accentColor": "#cba6f7",
-  "enabledCssSnippets": [
-    "colunas"
-  ]
+  "enabledCssSnippets": []
 }

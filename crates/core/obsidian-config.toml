@@ -1,5 +1,10 @@
 # config.toml padrão embutido no md-book (gerado por scripts/atualizar-obsidian.sh).
 [[plugin]]
+id = "colunas-fixas"
+repo = "rillmind/obsidian-colunas-fixas"
+version = "1.1.0"
+
+[[plugin]]
 id = "image-darkmodifier"
 repo = "0qln/obsidian-image-darkmodifier"
 version = "1.2.0"
