@@ -794,7 +794,7 @@ dependencies = [
 
 [[package]]
 name = "mdbook-generator"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -879,7 +879,7 @@ dependencies = [
 
 [[package]]
 name = "mdbook_gen_core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "deunicode",
  "image",
