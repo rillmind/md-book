@@ -15,6 +15,7 @@ tempfile = "3.27.0"
 thiserror = "2.0.21"
 toml = "1"
 ureq = "3"
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [features]
 # Linka o PDFium estaticamente (requer PDFIUM_STATIC_LIB_PATH com libpdfium.a).

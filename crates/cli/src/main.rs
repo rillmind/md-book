@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use mdbook_gen_core::{
-  ConfigReport, HeadingSource, ObsidianOutcome, Options, OutputLayout, Progress, Template,
+  Book, ConfigReport, HeadingSource, ObsidianOutcome, Options, OutputLayout, Progress, Template,
   WriteOptions,
 };
 
@@ -32,7 +32,7 @@ struct Cli {
   #[arg(long = "author")]
   authors: Vec<String>,
 
-  /// Idioma do livro no book.toml (ex.: pt-BR).
+  /// Idioma do livro, no book.toml ou na EPUB (ex.: pt-BR).
   #[arg(long)]
   language: Option<String>,
 
@@ -63,6 +63,12 @@ struct Cli {
   #[arg(long, conflicts_with = "build")]
   full: bool,
 
+  /// Gera um arquivo EPUB (para leitores de e-book) em vez da pasta; o -o passa a ser o arquivo,
+  /// ou a pasta onde ele é criado [padrão: ./<nome-do-pdf>.epub]. Não cria configurações do
+  /// Obsidian.
+  #[arg(long, conflicts_with_all = ["build", "flat", "full"])]
+  epub: bool,
+
   /// Não cria nem atualiza as configurações do Obsidian (.obsidian) na pasta gerada; útil ao
   /// gerar dentro de um vault que já existe, para não criar um vault dentro de outro.
   #[arg(long)]
@@ -76,7 +82,7 @@ struct Cli {
     num_args = 1..,
     conflicts_with_all = [
       "input", "output", "title", "authors", "language", "split_level", "no_outline",
-      "force", "build", "flat", "full", "no_config", "save_config",
+      "force", "build", "flat", "full", "epub", "no_config", "save_config",
     ]
   )]
   apply_config: Vec<PathBuf>,
@@ -92,7 +98,7 @@ struct Cli {
     default_missing_value = ".",
     conflicts_with_all = [
       "input", "output", "title", "authors", "language", "split_level", "no_outline",
-      "force", "build", "flat", "full", "no_config",
+      "force", "build", "flat", "full", "epub", "no_config",
     ]
   )]
   save_config: Option<PathBuf>,
@@ -124,7 +130,14 @@ fn main() -> Result<()> {
     authors: cli.authors,
     language: cli.language,
   };
-  let output = cli.output.unwrap_or_else(|| default_output(&input));
+  let output = match cli.output {
+    // Uma pasta existente recebe a EPUB com o nome do PDF.
+    Some(dir) if cli.epub && dir.is_dir() => epub_path(dir.join(default_output(&input))),
+    Some(path) if cli.epub => epub_path(path),
+    Some(dir) => dir,
+    None if cli.epub => epub_path(default_output(&input)),
+    None => default_output(&input),
+  };
 
   let bar = ProgressBar::new(0).with_style(
     ProgressStyle::with_template("{spinner} {msg} [{bar:30}] {pos}/{len}")
@@ -143,6 +156,19 @@ fn main() -> Result<()> {
   bar.finish_and_clear();
   let book = book?;
 
+  if cli.epub {
+    let written = mdbook_gen_core::write_epub(&book, &output, cli.force)?;
+    println!(
+      "{} capítulo(s) e {} imagem(ns) em {} (títulos: {})",
+      written.chapters,
+      written.images,
+      written.path.display(),
+      heading_source(&book)
+    );
+    warn(&book);
+    return Ok(());
+  }
+
   let layout = match (cli.flat, cli.full) {
     (true, _) => OutputLayout::Flat,
     (_, true) => OutputLayout::Full,
@@ -159,11 +185,7 @@ fn main() -> Result<()> {
   };
   let written = mdbook_gen_core::write_book(&book, &output, &write)?;
 
-  let source = match book.heading_source {
-    HeadingSource::Outline => "bookmarks do PDF",
-    HeadingSource::FontSize => "tamanho da fonte",
-    HeadingSource::None => "nenhum título detectado",
-  };
+  let source = heading_source(&book);
   // No modo --full o destino é o arquivo único; nos outros, o diretório.
   let destination = match layout {
     OutputLayout::Full => written.chapter_files[0].display(),
@@ -186,6 +208,23 @@ fn main() -> Result<()> {
     ),
     _ => {}
   }
+  warn(&book);
+
+  if cli.build {
+    build_html(&written.root)?;
+  }
+  Ok(())
+}
+
+fn heading_source(book: &Book) -> &'static str {
+  match book.heading_source {
+    HeadingSource::Outline => "bookmarks do PDF",
+    HeadingSource::FontSize => "tamanho da fonte",
+    HeadingSource::None => "nenhum título detectado",
+  }
+}
+
+fn warn(book: &Book) {
   if book.outline_ignored {
     eprintln!("aviso: os bookmarks do PDF estavam incompletos e foram ignorados");
   }
@@ -195,11 +234,6 @@ fn main() -> Result<()> {
       book.failed_pages
     );
   }
-
-  if cli.build {
-    build_html(&written.root)?;
-  }
-  Ok(())
 }
 
 /// Registra o `.obsidian` do vault como padrão do usuário.
@@ -309,6 +343,20 @@ fn describe(report: &ConfigReport) -> String {
 
 fn default_output(input: &Path) -> PathBuf {
   PathBuf::from(input.file_stem().unwrap_or(input.as_os_str()))
+}
+
+/// Garante a extensão `.epub` no arquivo de saída.
+fn epub_path(path: PathBuf) -> PathBuf {
+  let is_epub = path
+    .extension()
+    .is_some_and(|e| e.eq_ignore_ascii_case("epub"));
+  if is_epub {
+    path
+  } else {
+    let mut name = path.into_os_string();
+    name.push(".epub");
+    PathBuf::from(name)
+  }
 }
 
 #[cfg(feature = "build")]

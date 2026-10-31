@@ -1,10 +1,12 @@
 //! Núcleo do mdbook-generator: converte um PDF de texto num projeto mdBook.
 //!
 //! O fluxo é dividido em duas etapas para que CLI, TUI e GUI possam mostrar uma prévia:
-//! [`analyze`] lê o PDF e monta o [`Book`] em memória; [`write_book`] grava em disco.
+//! [`analyze`] lê o PDF e monta o [`Book`] em memória; [`write_book`] grava em disco (ou
+//! [`write_epub`], como EPUB).
 
 mod book;
 mod config;
+mod epub;
 mod extract;
 mod figures;
 mod furniture;
@@ -26,6 +28,7 @@ pub use config::{
   CACHE_ENV, CONFIG_ENV, SaveReport, config_dir, ensure_default as ensure_default_config,
   save as save_config,
 };
+pub use epub::{WrittenEpub, write_epub};
 pub use markdown::render_chapter;
 pub use model::Style;
 pub use obsidian::{
@@ -50,6 +53,8 @@ pub enum Error {
   NoText,
   #[error("o diretório de saída {0} não está vazio (use --force para sobrescrever)")]
   OutputNotEmpty(PathBuf),
+  #[error("o arquivo {0} já existe (use --force para sobrescrever)")]
+  OutputExists(PathBuf),
   #[error("configuração inválida: {0}")]
   Config(String),
   #[error("falha ao baixar da comunidade do Obsidian: {0}")]

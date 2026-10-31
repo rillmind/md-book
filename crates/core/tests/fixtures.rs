@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use mdbook_gen_core::{
   Block, Book, HeadingSource, ObsidianOutcome, Options, OutputLayout, Template, WriteOptions,
-  analyze, write_book,
+  analyze, write_book, write_epub,
 };
 
 const CHAPTERS: [&str; 3] = [
@@ -313,4 +313,50 @@ fn book_inside_an_existing_vault_reuses_its_settings() {
   let chapter = std::fs::read_to_string(&written.chapter_files[0]).unwrap();
   assert!(chapter.contains("@darkmode](images/"));
   std::fs::remove_dir_all(&vault).unwrap();
+}
+
+#[test]
+fn writes_epub_with_chapters_toc_and_images() {
+  use std::io::Read;
+
+  let book = convert("figuras.pdf");
+  let dir = std::env::temp_dir().join(format!("mdbook-gen-epub-{}", std::process::id()));
+  let _ = std::fs::remove_dir_all(&dir);
+  let path = dir.join("livro.epub");
+
+  let written = write_epub(&book, &path, false).unwrap();
+  assert_eq!(written.images, 2);
+  // Nenhum arquivo temporário sobra ao lado da EPUB.
+  assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+
+  let mut epub = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+  let mimetype = epub.by_index(0).unwrap();
+  assert_eq!(mimetype.name().unwrap(), "mimetype");
+  assert_eq!(mimetype.compression(), zip::CompressionMethod::Stored);
+  drop(mimetype);
+  let mut read = |name: &str| {
+    let mut text = String::new();
+    epub
+      .by_name(name)
+      .unwrap()
+      .read_to_string(&mut text)
+      .unwrap();
+    text
+  };
+  let opf = read("OEBPS/content.opf");
+  assert_eq!(opf.matches("<itemref ").count(), book.chapters.len());
+  assert_eq!(opf.matches("media-type=\"image/").count(), 2);
+  let nav = read("OEBPS/nav.xhtml");
+  for chapter in &book.chapters {
+    assert!(nav.contains(&chapter.title), "{nav}");
+  }
+  let chapters: String = (1..=book.chapters.len())
+    .map(|i| read(&format!("OEBPS/c{i:04}.xhtml")))
+    .collect();
+  assert_eq!(chapters.matches("<img src=\"images/").count(), 2);
+
+  // Um arquivo existente só é substituído com force.
+  assert!(write_epub(&book, &path, false).is_err());
+  write_epub(&book, &path, true).unwrap();
+  std::fs::remove_dir_all(&dir).unwrap();
 }

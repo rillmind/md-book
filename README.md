@@ -8,7 +8,7 @@ linha de comando; TUI e GUI estão previstas.
 
 Lê um PDF de texto, detecta os capítulos (pelos bookmarks do PDF, quando existem) e grava um
 projeto mdBook pronto: `book.toml`, `src/SUMMARY.md` e um arquivo `NN-titulo.md` por capítulo.
-Com `--build`, também gera o HTML do livro.
+Com `--build`, também gera o HTML do livro; com `--epub`, gera um e-book EPUB no lugar do projeto.
 
 ## Por que existe
 
@@ -44,6 +44,7 @@ md-book livro.pdf -o meu-livro           # gera o projeto mdBook em ./meu-livro
 md-book livro.pdf -o meu-livro --build   # gera também o HTML em ./meu-livro/book
 md-book livro.pdf -o ~/vault/Livro --flat  # só os capítulos .md e images/, numa pasta (Obsidian)
 md-book livro.pdf -o ~/vault/Livro --full  # o livro inteiro em book.md, mais images/
+md-book livro.pdf --epub                 # gera ./livro.epub, para leitores de e-book
 md-book --apply-config ~/Livros/A ~/Livros/B  # confere e aplica as configs do Obsidian em pastas existentes
 md-book --help                           # todas as opções
 ```
@@ -52,6 +53,11 @@ Com `--flat`, a pasta de saída recebe apenas `NN-capitulo.md` e `images/`, sem 
 `SUMMARY.md`. Com `--full`, recebe um único `book.md` (capítulos como títulos `#`,
 seções como `##`...) e `images/`. Nesses dois modos, mesmo com `--force`, nada que já esteja na
 pasta é apagado: só os arquivos de mesmo nome são sobrescritos.
+
+Com `--epub`, a saída é um único arquivo EPUB 3 (capítulos, sumário, imagens, tabelas e notas de
+rodapé), que abre em leitores como Kindle (via Send to Kindle), Kobo, Apple Books e Calibre. O
+`-o` é o arquivo (`.epub` é acrescentado se faltar) ou uma pasta onde ele é criado com o nome do
+PDF; um arquivo que já existe só é substituído com `--force`. Nada do Obsidian é criado.
 
 ### Configurações do Obsidian
 
